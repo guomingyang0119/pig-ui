@@ -89,7 +89,7 @@ export function checkPassword(password: string) {
 /**
  * 注册用户
  */
-export const registerUser = (userInfo: object) => {
+export const registerUser = (userInfo: { username: string; password: string }) => {
 	return request({
 		url: '/admin/register/user',
 		method: 'post',

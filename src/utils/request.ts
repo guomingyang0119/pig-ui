@@ -76,7 +76,7 @@ service.interceptors.request.use(
  */
 const handleResponse = (response: AxiosResponse<any>) => {
 	if (response.data.code === 1) {
-		throw response.data;
+		throw { ...response.data, msg: response.data.msg || '服务处理失败，但未返回具体原因' };
 	}
 
 	// 针对密文返回解密
@@ -92,7 +92,7 @@ const handleResponse = (response: AxiosResponse<any>) => {
  * 添加 Axios 的响应拦截器，用于全局响应结果处理
  */
 service.interceptors.response.use(handleResponse, (error) => {
-	const status = Number(error.response.status) || 200;
+	const status = Number(error.response?.status) || 0;
 	if (status === 423) {
 		return Promise.reject({ msg: '"演示环境，仅供预览"' });
 	}
@@ -112,7 +112,13 @@ service.interceptors.response.use(handleResponse, (error) => {
 		error.response.data = decrypt(error.response?.data.encryption);
 	}
 
-	return Promise.reject(error.response.data);
+	const body = error.response?.data;
+	if (body && typeof body === 'object' && (body.msg || body.message)) return Promise.reject(body);
+	const text = typeof body === 'string' && !body.trim().startsWith('<') ? body.trim().slice(0, 200) : '';
+	const message = text || (status === 413 ? '上传文件过大（HTTP 413）'
+		: status === 504 ? '识别请求超时（HTTP 504）'
+			: status ? `请求失败（HTTP ${status}）` : error.message || '无法连接报价服务');
+	return Promise.reject({ msg: message, status });
 });
 
 // 导出 axios 实例

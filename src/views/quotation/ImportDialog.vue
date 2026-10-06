@@ -26,6 +26,13 @@
 							<el-tag :type="reviewIssue(plan) || warnings(plan).length ? 'warning' : 'info'" size="small">{{ sheetStatus(plan) }}</el-tag>
 						</template>
 						<template v-if="plan.sheet.rows.length">
+							<el-alert
+								v-if="plan.sheet.auxiliary"
+								title="人工核对参数已自动关联主表，本工作表不单独计价。"
+								type="info"
+								:closable="false"
+								class="import-alert"
+							/>
 							<el-alert v-if="reviewIssue(plan)" :title="reviewIssue(plan)" type="warning" :closable="false" class="import-alert" />
 							<template v-if="!plan.excluded">
 								<p v-for="warning in warnings(plan)" :key="warning" class="mapping-warning">{{ warning }}</p>
@@ -91,7 +98,7 @@
 									</el-table>
 								</section>
 							</template>
-							<details class="import-settings" :open="!!reviewIssue(plan) || plan.excluded">
+							<details v-if="!plan.sheet.auxiliary" class="import-settings" :open="!!reviewIssue(plan) || plan.excluded">
 								<summary>起始行与其他设置</summary>
 								<div class="settings-content">
 									<label
@@ -199,6 +206,7 @@ function columnUsed(plan: SheetPlan, key: string, index: number) {
 	return Object.entries(plan.mapping).some(([field, value]) => field !== key && value === index);
 }
 function reviewIssue(plan: SheetPlan) {
+	if (plan.sheet.auxiliary) return '';
 	if (!plan.sheet.rows.length) return '';
 	if (plan.excluded) return plan.excludeReason.trim() ? '' : '请填写本表不参与报价的原因。';
 	if (!plan.startRow || plan.mapping.name == null) return '请核对产品数据起始行和产品名称列。';
@@ -208,6 +216,7 @@ function reviewIssue(plan: SheetPlan) {
 	return '';
 }
 function sheetStatus(plan: SheetPlan) {
+	if (plan.sheet.auxiliary) return '核对参数 · 自动关联主表';
 	if (!plan.sheet.rows.length) return '空白表 · 自动跳过';
 	if (reviewIssue(plan)) return '待核对';
 	if (plan.excluded) return '已排除';
@@ -249,8 +258,8 @@ async function upload(event: Event) {
 			sheet,
 			startRow: sheet.auto_start_row || undefined,
 			mapping: { ...sheet.auto_mapping },
-			excluded: false,
-			excludeReason: '',
+			excluded: !!sheet.auxiliary,
+			excludeReason: sheet.auxiliary ? '核对参数已自动关联主表，不单独计价' : '',
 			expandedGroups: [],
 			showAllTypes: false,
 			showSource: false,

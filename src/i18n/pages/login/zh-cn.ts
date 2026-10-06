@@ -76,6 +76,7 @@ export default {
 		username: '用户名',
 		password: '密码',
 		confirmPassword: '确认密码',
+		confirmPasswordPlaceholder: '请再次输入密码',
 		mobile: '手机号',
 		email: '邮箱',
 		submit: '注册',

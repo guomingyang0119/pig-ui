@@ -25,16 +25,25 @@
 					><el-checkbox v-model="options.include_auxiliaries">包含辅材</el-checkbox></el-form-item
 				>
 				<el-form-item label="施工标高（米）"><el-input v-model="options.height" placeholder="按现场填写" /></el-form-item>
-				<el-form-item label="施工条件"><el-checkbox v-model="options.cross_work">交叉施工</el-checkbox></el-form-item>
-				<el-form-item label="现场附加费"
+				<el-form-item label="施工条件"><el-checkbox v-model="options.cross_work" @change="onCrossWorkChange">交叉施工</el-checkbox></el-form-item>
+				<el-form-item v-if="options.cross_work" label="交叉施工费用处理" style="grid-column: span 2">
+					<el-radio-group v-model="options.cross_work_fee_decision" @change="onCrossWorkFeeDecisionChange">
+						<el-radio value="charge" border>计取现场附加费</el-radio>
+						<el-radio value="waive" border>本次不计取</el-radio>
+					</el-radio-group>
+				</el-form-item>
+				<el-form-item v-else label="现场附加费"
 					><el-checkbox v-model="options.include_site_fee">计取现场附加费（含高空措施费）</el-checkbox></el-form-item
 				>
-				<el-form-item v-if="options.include_site_fee" label="现场附加费（未税总额 / 元）"
+				<el-form-item v-if="chargesSiteFee" label="现场附加费（未税总额 / 元）"
 					><el-input v-model="options.site_amount" placeholder="请填写报价人员确认的金额"
 				/></el-form-item>
-				<el-form-item v-if="options.include_site_fee" label="现场附加费说明" style="grid-column: span 3"
+				<el-form-item v-if="chargesSiteFee" label="现场附加费说明" style="grid-column: span 3"
 					><el-input v-model="options.site_note" maxlength="500" placeholder="金额大于 0 时必填，例如：高空施工附加费"
 				/></el-form-item>
+				<el-form-item v-if="options.cross_work && options.cross_work_fee_decision === 'waive'" label="本次不计取原因" style="grid-column: span 3">
+					<el-input v-model="options.site_waive_reason" maxlength="500" placeholder="请填写本次不另行计取现场附加费的原因" />
+				</el-form-item>
 			</el-form>
 			<p class="q-muted">{{ siteConditionHint }}</p>
 			<div class="q-section-head installation-extras-head">
@@ -67,11 +76,11 @@
 				</el-table-column>
 			</el-table>
 			<el-alert
-				v-if="pendingInstallationCount"
+				v-if="pendingTotalCount"
 				type="error"
 				show-icon
 				:closable="false"
-				:title="`还有 ${pendingInstallationCount} 项安装费用待确认，暂不能形成最终安装合计`"
+				:title="pendingSummary"
 				style="margin-top: 14px"
 			/>
 			<p v-if="fee" class="q-muted">
@@ -97,23 +106,53 @@ import type { QuoteBody, InstallationCatalogBody, InstallationEntry, Installatio
 import { blankInstallation } from '/@/views/quotation/installation';
 import { money } from '/@/views/quotation/shared';
 import InstallationEntryFields from './InstallationEntryFields.vue';
-const props = defineProps<{ body: QuoteBody; locked: boolean; catalog?: InstallationCatalogBody; fee?: InstallationFee }>();
+const props = defineProps<{
+	body: QuoteBody;
+	locked: boolean;
+	catalog?: InstallationCatalogBody;
+	fee?: InstallationFee;
+	productPendingCount?: number;
+}>();
 const emit = defineEmits<{ (e: 'included-change'): void }>();
 const options = computed(() => props.body.installation_options!);
 const hasDuctRows = computed(
 	() => props.body.rows.some((row) => row.category === '风管') || (props.body.installation_items || []).some((item) => item.category === '风管')
 );
+const chargesSiteFee = computed(() =>
+	options.value.cross_work ? options.value.cross_work_fee_decision === 'charge' : options.value.include_site_fee
+);
 const extraEntries = computed(() =>
 	(props.body.installation_items || []).map((entry, index) => ({ entry, lineIndex: props.body.rows.length + index }))
 );
 const siteConditionHint = computed(
-	() => '施工标高和交叉施工仅记录现场工况，不会自动产生费用；需要计取时，请勾选现场附加费并填写金额。'
+	() =>
+		options.value.cross_work
+			? '交叉施工必须确认是否计取现场附加费；计取时填写金额和原因，不计取时填写不计取原因。'
+			: '施工标高仅记录现场工况；需要计取高空措施费等现场费用时，请勾选现场附加费并填写金额。'
 );
 const projectLabel = (id: string) => props.catalog?.projects.find((p) => p.id === id)?.name || (id ? '项目需重新核对' : '系统自动匹配');
 const dialog = ref(false),
 	draft = ref<InstallationEntry>();
 let target: InstallationEntry | undefined;
 const pendingInstallationCount = computed(() => props.fee?.lines?.filter((line) => line.status === 'pending').length || 0);
+const pendingProductCount = computed(() => props.productPendingCount || 0);
+const pendingTotalCount = computed(() => pendingProductCount.value + pendingInstallationCount.value);
+const pendingSummary = computed(() => {
+	const product = pendingProductCount.value;
+	const installation = pendingInstallationCount.value;
+	return `产品和安装共 ${pendingTotalCount.value} 项待确认（产品 ${product} 项、安装费用 ${installation} 项），暂不能形成最终报价`;
+});
+function onCrossWorkChange(value: boolean | string | number) {
+	if (value) options.value.cross_work_fee_decision = options.value.include_site_fee ? 'charge' : '';
+	else {
+		options.value.cross_work_fee_decision = '';
+		options.value.site_waive_reason = '';
+	}
+}
+function onCrossWorkFeeDecisionChange(value: string | number | boolean | undefined) {
+	options.value.include_site_fee = value === 'charge';
+	if (value === 'charge') options.value.site_waive_reason = '';
+}
 function line(row: { lineIndex: number }): InstallationLine | undefined {
 	return props.fee?.lines?.[row.lineIndex];
 }

@@ -89,6 +89,7 @@ export function equipmentFormulaInChinese(expression: string) {
 		.replace(/\//g, '÷');
 }
 export const louverLabels: Record<string, string> = {
+	normally_open: '常开式百叶',
 	single: '单层百叶',
 	single_valve: '单层百叶带阀',
 	single_mesh: '单层百叶带网',
@@ -204,7 +205,51 @@ export const equipmentFields: EquipmentField[] = [
 	{ key: 'mechanism_cost', label: '已核实基础机构成本（元）' },
 	{ key: 'motor_model', label: '指定电机型号' },
 	{ key: 'area_cost', label: '已核实综合面积成本（元/㎡）' },
-	{ key: 'louver_type', label: '风口类型代号（识别不足时填写）' },
+	{ key: 'louver_type', label: '实际风口类型', choices: Object.entries(louverLabels) },
+	{ key: 'pricing_louver_type', label: '风口计价口径', choices: Object.entries(louverLabels).filter(([code]) => code !== 'normally_open') },
+	{ key: 'recognition_evidence', label: '备注识别依据' },
+	{
+		key: 'attached_valve_kind',
+		label: '附阀类型',
+		choices: [
+			['fire', '防火阀'],
+			['electric_fire', '电动防火阀'],
+			['check', '止回阀'],
+		],
+	},
+	{ key: 'attached_valve_width', label: '附阀宽度（mm）' },
+	{ key: 'attached_valve_height', label: '附阀高度（mm）' },
+	{ key: 'attached_valve_diameter', label: '附阀直径（mm，与宽高二选一）' },
+	{ key: 'attached_valve_count', label: '每台风机附阀数量' },
+	{
+		key: 'attached_valve_cost_included',
+		label: '风机成本是否已含阀',
+		choices: [
+			['false', '未含阀，分别计算'],
+			['true', '已含阀，填整套成本'],
+		],
+	},
+	{ key: 'fan_set_cost', label: '整套不含税成本（已含阀及适用防爆成本）' },
+	{
+		key: 'attached_valve_control',
+		label: '附阀机构方式',
+		choices: [
+			['near', '近控'],
+			['remote', '远控'],
+			['auto', '自动'],
+		],
+	},
+	{
+		key: 'attached_valve_material',
+		label: '附阀材质',
+		choices: [
+			['galvanized', '镀锌 / 普通'],
+			['stainless_201', '201不锈钢'],
+			['stainless_304', '304不锈钢'],
+		],
+	},
+	{ key: 'attached_valve_thickness', label: '附阀板厚（mm）' },
+	{ key: 'attached_valve_splice_cost', label: '附阀确认拼接费（元）' },
 ];
 
 const equipmentFieldByKey = new Map(equipmentFields.map((field) => [field.key, field]));
@@ -232,6 +277,17 @@ const fieldsByCategory: Record<string, string[]> = {
 		'thickness',
 		'explosion',
 		'motor_model',
+		'attached_valve_kind',
+		'attached_valve_width',
+		'attached_valve_height',
+		'attached_valve_diameter',
+		'attached_valve_count',
+		'attached_valve_cost_included',
+		'fan_set_cost',
+		'attached_valve_control',
+		'attached_valve_material',
+		'attached_valve_thickness',
+		'attached_valve_splice_cost',
 	],
 	风阀: [
 		'equipment_kind',
@@ -256,6 +312,8 @@ const fieldsByCategory: Record<string, string[]> = {
 		'shape',
 		'dimension_basis',
 		'louver_type',
+		'pricing_louver_type',
+		'recognition_evidence',
 		'area_cost',
 	],
 	消声设备: [
@@ -280,8 +338,7 @@ const fieldsByCategory: Record<string, string[]> = {
 export function equipmentFieldsFor(category: string, kind = ''): EquipmentField[] {
 	let keys = fieldsByCategory[category] || ['equipment_kind'];
 	if (category === '消声设备' && kind === 'elbow') keys = ['equipment_kind', 'area_per_unit'];
-	else if (category === '消声设备' && ['silencer', 'plenum'].includes(kind))
-		keys = keys.filter((key) => key !== 'area_per_unit');
+	else if (category === '消声设备' && ['silencer', 'plenum'].includes(kind)) keys = keys.filter((key) => key !== 'area_per_unit');
 	const allowedKinds = kindsByCategory[category];
 	return keys.flatMap((key) => {
 		const field = equipmentFieldByKey.get(key);

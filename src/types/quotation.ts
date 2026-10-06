@@ -1,5 +1,67 @@
 export type Money = string | null;
+export interface ProductRuleParameter {
+	key: string;
+	label: string;
+	unit: string;
+	default_value?: string;
+	source?: 'input' | 'catalog_rate';
+	rate_key?: string;
+}
+export interface ProductRuleCost {
+	name: string;
+	expression: string;
+}
+export interface ProductRuleCustomCost {
+	parameters: ProductRuleParameter[];
+	costs: ProductRuleCost[];
+}
+export interface ProductRuleComponent {
+	name: string;
+	source: 'equipment' | 'catalog_rate' | 'fixed';
+	equipment_kind?: string;
+	canonical_name?: string;
+	attributes?: Record<string, string>;
+	rate_key?: string;
+	unit_cost?: string;
+	unit?: string;
+	quantity_expression: string;
+	loss_rate: string;
+}
+export interface ProductRuleBody {
+	name: string;
+	rule_type: 'alias' | 'combination' | 'formula';
+	category?: string;
+	unit: string;
+	aliases: string[];
+	canonical_name?: string;
+	attributes: Record<string, string>;
+	conditions: Record<string, string>;
+	components: ProductRuleComponent[];
+	custom_cost?: ProductRuleCustomCost;
+	description?: string;
+	formula?: string;
+	template_key?: string;
+	effective_from?: string;
+	effective_to?: string;
+}
+export interface ProductRuleRecommendation {
+	source: string;
+	id?: string;
+	family?: string;
+	version?: number;
+	body: ProductRuleBody;
+	reasons: string[];
+	score: number;
+}
+export interface ProductRuleRecommendations {
+	templates: ProductRuleBody[];
+	recommendations: ProductRuleRecommendation[];
+	can_publish: boolean;
+	catalog_rates?: { key: string; label: string }[];
+}
 export interface QuoteRow {
+	product_rule?: ProductRuleBody;
+	product_rule_family?: string;
 	installation?: InstallationEntry;
 	candidate_id?: string;
 	row_id?: string;
@@ -17,7 +79,7 @@ export interface QuoteRow {
 	source_issue?: boolean;
 	source_row?: string | number;
 	source_sheet?: string;
-	original?: { cells: string[] };
+	original?: { cells: string[]; source_file?: string; source_sheet?: string; source_locator?: string; source_excerpt?: string };
 }
 export interface DuctOptions {
 	area_basis: string;
@@ -37,6 +99,8 @@ export interface DuctOptions {
 	payment_option: string;
 }
 export interface QuoteBody {
+	ai_review_status?: 'pending' | 'approved';
+	ai_source_files?: string[];
 	include_freight: boolean | null;
 	recognition_mode?: string;
 	installation_options?: InstallationOptions;
@@ -57,9 +121,20 @@ export interface QuoteBody {
 	source_special_rows?: { source_sheet?: string; source_row: number; kind: string; quantity?: string; original?: { cells: string[] } }[];
 }
 export interface RowResult {
+	product_rule?: { id?: string; family?: string; version?: number; body?: ProductRuleBody; scope?: string };
+	product_rule_issue?: string;
 	pricing_mode?: string;
 	candidates?: { id: string; body: { name: string; attributes: FanPoint } }[];
-	detail?: { selected_fan?: FanPoint; selection_note?: string; components?: Record<string, string>; [key: string]: unknown };
+	detail?: {
+		selected_fan?: FanPoint;
+		selection_note?: string;
+		components?:
+			| Record<string, string>
+			| { name: string; source: string; quantity: string; effective_quantity?: string; unit_cost: string; amount: string }[];
+		parameters?: { key: string; label: string; unit: string; value: Money; source: string }[];
+		formula_costs?: { name: string; expression: string; amount: string }[];
+		[key: string]: unknown;
+	};
 	status: 'pending' | 'priced' | 'excluded';
 	reason: string;
 	unit_price: Money;
@@ -153,6 +228,29 @@ export interface ReviewImportPreview {
 	installation_total: string;
 	before_payment_total: string;
 }
+
+export interface AiInputImportChange {
+	row_id: string;
+	visible_row: number;
+	name: string;
+	field: string;
+	field_label: string;
+	before: string;
+	after: string;
+}
+
+export interface AiInputImportPreview {
+	import_id: string;
+	filename: string;
+	line_count: number;
+	product_row_count: number;
+	special_row_count: number;
+	change_count: number;
+	changed_row_count: number;
+	unchanged_count: number;
+	changes: AiInputImportChange[];
+	review_rows: { row_id: string; visible_row: number; name: string; changed: boolean; changes: AiInputImportChange[] }[];
+}
 export interface ExportRecord {
 	id: string;
 	filename: string;
@@ -214,6 +312,7 @@ export interface Catalog<T = CatalogBody> {
 	body: T;
 }
 export interface ImportSheet {
+	auxiliary?: boolean;
 	auto_context_rows?: { number: number; kind: string; label: string }[];
 	auto_mapping?: Record<string, number | null>;
 	auto_start_row?: number | null;
@@ -254,8 +353,10 @@ export interface InstallationOptions {
 	include_site_fee: boolean;
 	height: string;
 	cross_work: boolean;
+	cross_work_fee_decision: '' | 'charge' | 'waive';
 	site_amount: string;
 	site_note: string;
+	site_waive_reason: string;
 }
 export interface InstallationProject {
 	id: string;

@@ -80,6 +80,7 @@ export default {
 		username: 'Username',
 		password: 'Password',
 		confirmPassword: 'Confirm Password',
+		confirmPasswordPlaceholder: 'Enter password again',
 		mobile: 'Mobile Number',
 		email: 'Email',
 		submit: 'Register',
