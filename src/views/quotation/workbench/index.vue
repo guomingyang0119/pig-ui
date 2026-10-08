@@ -1,5 +1,6 @@
 <template>
 	<main class="quotation-page" v-loading="busy">
+		<!-- 报价工作台主页面：维护客户清单与整单条件，协调导入、逐行规则、安装、人工核验、保存试算及草稿/正式导出。金额与正式可导出状态以服务端结果为准。 -->
 		<template v-if="!quote">
 			<header class="q-header">
 				<div>
@@ -45,19 +46,27 @@
 					<el-button v-if="canEdit && quote.state !== 'archived'" @click="revise">创建修订版</el-button>
 					<el-button v-if="quote.body.ai_review_status" @click="downloadStandard">下载待核验报价单</el-button>
 					<el-button v-if="!locked && quote.body.ai_review_status" @click="chooseAiInputFile">导回已校验清单</el-button>
-					<el-button v-if="!locked && aiReviewPending" type="warning" @click="approveAi">人工核验完成</el-button>
-					<el-button v-if="!locked" @click="save(false)" :loading="saving">保存草稿</el-button>
-					<el-button v-if="!locked" type="primary" :disabled="aiReviewPending" @click="save(true)" :loading="saving">保存并试算</el-button>
+					<el-button v-if="!locked" @click="save(false)" :loading="saving" :disabled="reviewingAi">保存草稿</el-button>
+					<el-button v-if="!locked && quote.body.ai_review_status" type="primary" @click="approveAi" :loading="reviewingAi" :disabled="saving">
+						{{ aiReviewRequired ? '核验完成并试算' : '重新试算' }}
+					</el-button>
+					<el-button v-else-if="!locked" type="primary" @click="save(true)" :loading="saving">保存并试算</el-button>
 				</div>
 			</header>
 			<el-alert
-				v-if="aiReviewPending"
+				v-if="aiReviewRequired"
 				type="warning"
 				:closable="false"
 				show-icon
-				:title="`AI已按正式报价样式生成待核验草稿。${
+				:title="`${dirty ? '报价内容已修改，需要重新人工核验。' : 'AI清单待人工核验。'}${
 					aiUnknownNameCount ? `有 ${aiUnknownNameCount} 行产品名称待识别。` : ''
-				}请对照客户资料逐行核验；可以在页面修改后保存，也可以下载Excel校验后“导回已校验清单”，再点击“人工核验完成”；确认前不能试算。`"
+				}请对照客户资料逐行核对，可在页面修改或导回已校验清单。完成后点击“核验完成并试算”，系统会保存修改、记录核验并试算。`"
+			/>
+			<el-alert
+				v-if="quote.body.ai_reused_from"
+				type="info"
+				:closable="false"
+				:title="`已采用同一份原文件中此前核验的 ${quote.body.ai_reused_from.row_count} 行产品输入。请核对本次内容与报价条件，重新核验并试算。`"
 			/>
 			<div v-if="quote.body.ai_source_files?.length" class="q-toolbar" style="margin: 12px 0">
 				<span>客户原始资料：</span>
@@ -76,7 +85,7 @@
 				v-if="quote.result_stale && quote.body.include_freight != null"
 				type="warning"
 				:closable="false"
-				title="运算规则已更新，当前结果不能继续导出，请重新保存并试算。"
+				title="运算规则已更新，当前结果不能继续导出，请重新试算。"
 			/>
 			<el-alert v-if="isAuto && hasDuctRows && !activeCatalog" type="warning" :closable="false" title="清单含风管，需先核对并发布风管指标。" />
 			<section class="q-section">
@@ -356,7 +365,12 @@
 						quote.result ? (isEquipment ? '设备按整数向上取整；风管保留 1 位小数' : '使用指标 V' + quote.result.duct_catalog?.version) : '尚未试算'
 					}}</span>
 				</div>
-				<el-alert v-if="dirty" title="内容有修改，下方为上次试算结果。请保存并试算后再导出。" type="warning" :closable="false" />
+				<el-alert
+					v-if="dirty"
+					:title="'内容有修改，下方为上次试算结果。请' + (quote.body.ai_review_status ? '核验完成并试算' : '保存并试算') + '后再导出。'"
+					type="warning"
+					:closable="false"
+				/>
 				<el-alert
 					v-if="quote.result?.manual_review_import"
 					:title="`已回导人工校对结果：${quote.result.manual_review_import.filename}，共确认 ${quote.result.manual_review_import.change_count} 处修改。`"
@@ -513,7 +527,7 @@
 			<el-alert v-if="aiInputError" :title="aiInputError" type="error" :closable="false" show-icon />
 			<template v-if="aiInputPreview">
 				<el-alert
-					:title="`共 ${aiInputPreview.product_row_count} 条明细、${aiInputPreview.special_row_count} 条汇总或备注，修改了 ${aiInputPreview.changed_row_count} 行、${aiInputPreview.change_count} 个字段。确认后更新当前草稿，请继续完成“人工核验完成”和“保存并试算”。`"
+					:title="`共 ${aiInputPreview.product_row_count} 条明细、${aiInputPreview.special_row_count} 条汇总或备注，修改了 ${aiInputPreview.changed_row_count} 行、${aiInputPreview.change_count} 个字段。确认后更新当前草稿，请点击“核验完成并试算”。`"
 					type="warning"
 					:closable="false"
 					show-icon
@@ -538,7 +552,7 @@
 					</el-table-column>
 				</el-table>
 				<p v-else class="q-muted">
-					没有发现内容修改，可以关闭此窗口{{ aiReviewPending ? '，继续在草稿中确认“人工核验完成”。' : '继续处理草稿。' }}
+					没有发现内容修改，可以关闭此窗口{{ aiReviewRequired ? '，继续在草稿中点击“核验完成并试算”。' : '继续处理草稿。' }}
 				</p>
 			</template>
 			<template #footer>
@@ -557,8 +571,8 @@
 		>
 			<div v-if="selectedRow" class="quotation-page">
 				<el-alert
-				v-if="selectedResult?.reason || (canShowReviewReason() && selectedRow?.attributes.review_reason)"
-					:title="selectedResult?.reason || selectedRow?.attributes.review_reason"
+					v-if="selectedResult?.reason || rowReviewReason(selected)"
+					:title="selectedResult?.reason || rowReviewReason(selected)"
 					type="warning"
 					:closable="false"
 					style="margin-bottom: 14px"
@@ -663,16 +677,17 @@
 							<p v-if="dirty" class="q-error">客户需求参数已修改，上述为上次选型结果，请重新保存并试算。</p>
 						</template>
 						<template v-else-if="selectedResult?.candidates?.length">
-							<p class="q-error">找到 {{ selectedResult.candidates.length }} 个符合条件的风机，请确认最终采用的型号。</p>
+							<p class="q-error">{{ selectedResult.reason || `找到 ${selectedResult.candidates.length} 个候选风机，请核对参数并确认型号。` }}</p>
 							<el-radio-group v-model="selectedRow.candidate_id" :disabled="locked" aria-label="风机候选" class="fan-candidates">
-								<el-radio v-for="candidate in selectedResult.candidates" :key="candidate.id" :label="candidate.id">
+								<el-radio v-for="candidate in selectedResult.candidates" :key="candidate.id" :label="candidate.id" :disabled="!!candidate.body.attributes.requirement_mismatches">
 									<strong>{{ candidate.body.name }}</strong
 									>；机号 {{ candidate.body.attributes.size || '—' }}；功率 {{ candidate.body.attributes.powers.join('/') }} kW；风量
 									{{ candidate.body.attributes.airflow }} m³/h；风压 {{ candidate.body.attributes.pressure }} Pa；转速
 									{{ candidate.body.attributes.speed }} r/min
+									<span v-if="candidate.body.attributes.requirement_mismatches" class="q-error">；参考型号，{{ candidate.body.attributes.requirement_mismatches }}</span>
 								</el-radio>
 							</el-radio-group>
-							<p class="q-muted">选择候选后，请保存并重新试算以确认最终结果。</p>
+							<p class="q-muted">符合条件的候选可选择后保存并重新试算。参考型号须先核实差异，并填写确认后的需求参数。</p>
 						</template>
 						<p v-else class="q-muted">{{ selectedResult?.reason || '保存并试算后，系统会在这里显示最终选中的风机及完整参数。' }}</p>
 					</section>
@@ -680,8 +695,9 @@
 					<div class="q-wide">
 						<el-checkbox v-model="selectedRow.excluded">本行不计价（标题、合计或范围外项目）</el-checkbox>
 						<el-input v-if="selectedRow.excluded" v-model="selectedRow.exclude_reason" placeholder="必须填写不计价原因" style="margin: 8px 0" />
+						<p v-if="selectedRow.source_issue_reason" class="q-error">{{ selectedRow.source_issue_reason }}</p>
 						<el-checkbox v-if="selectedRow.source_issue" v-model="selectedRow.source_issue_confirmed"
-							>已核对原文件公式或错误值，并补入正确数据</el-checkbox
+							>已核对原资料异常或参数冲突，并确认本次采用的数据</el-checkbox
 						>
 					</div>
 				</el-form>
@@ -709,8 +725,10 @@
 					<summary>原始客户清单内容</summary>
 					<p v-if="selectedRow.source_sheet" class="q-muted">{{ selectedRow.source_sheet }} · 原表第 {{ selectedRow.source_row }} 行</p>
 					<p v-if="selectedRow.original?.source_file" class="q-muted">
-						客户来源：{{ selectedRow.original.source_file }} · {{ selectedRow.original.source_sheet }} {{ selectedRow.original.source_locator }}
+						客户来源：{{ selectedRow.original.source_file }} · {{ selectedRow.original.source_sheet?.trim() ? selectedRow.original.source_sheet : `空白表名（第 ${(selectedRow.original.source_sheet_index ?? 0) + 1} 个工作表）` }} {{ selectedRow.original.source_locator }}
 					</p>
+					<p v-if="selectedRow.attributes.position_tag" class="q-muted">原位号：{{ selectedRow.attributes.position_tag }}</p>
+					<p v-if="selectedRow.attributes.dimension_expression" class="q-muted">原尺寸算式：{{ selectedRow.attributes.dimension_expression }}；面板附加高度：{{ selectedRow.attributes.panel_height || '—' }} mm</p>
 					<p v-if="selectedRow.original?.source_excerpt" class="q-muted">来源文字：{{ selectedRow.original.source_excerpt }}</p>
 					<p class="q-muted">{{ selectedRow.original?.cells.join(' | ') || '手工建立' }}</p>
 				</details>
@@ -787,6 +805,7 @@
 	</main>
 </template>
 <script setup lang="ts" name="QuotationWorkbench">
+/** 报价工作台主页面：维护客户清单与整单条件，协调导入、逐行规则、安装、人工核验、保存试算及草稿/正式导出。金额与正式可导出状态以服务端结果为准。 */
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -795,6 +814,7 @@ import { quoteApi } from '/@/api/quotation';
 import { money, stateLabels, report, confirm, blankRow, rowFields, flangeTypes, shapes, productStates } from '/@/views/quotation/shared';
 import type { Catalog, Quote, QuoteRow, ExportRecord, InstallationCatalogBody, ReviewImportPreview, AiInputImportPreview, ProductRuleBody } from '/@/types/quotation';
 import ProductRuleDialog from './ProductRuleDialog.vue';
+import { currentReviewReason } from './rowReview';
 import InstallationPanel from './InstallationPanel.vue';
 import InstallationEntryFields from './InstallationEntryFields.vue';
 import ReviewImportTable from './ReviewImportTable.vue';
@@ -806,12 +826,15 @@ import '/@/views/quotation/quotation.scss';
 import { equipmentCategories, equipmentFields, equipmentFieldsFor, equipmentComponents } from '/@/views/quotation/equipment';
 const route = useRoute(),
 	router = useRouter();
+/** quote 保存当前报价版本及上次计算结果；baseline 记录已保存正文，busy/saving 区分一般请求与保存过程。 */
 const quote = ref<Quote>(),
 	catalogs = ref<Catalog[]>([]),
 	busy = ref(false),
 	saving = ref(false),
+	reviewingAi = ref(false),
 	failed = ref(false),
 	baseline = ref('');
+/** 普通导入、AI 导入和产品规则组件通过引用打开；两类回导各自保存预览，AI 回导另绑定目标报价 ID 与修订号。 */
 const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	aiImportDialog = ref<InstanceType<typeof AiImportDialog>>(),
 	productRuleDialog = ref<InstanceType<typeof ProductRuleDialog>>(),
@@ -829,16 +852,22 @@ const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	drawer = ref(false),
 	selected = ref(0),
 	sections = ref(['conditions']);
+/** 编辑与导出按钮分别检查账号权限；只有草稿可编辑，已定稿或归档版本通过修订继续处理。 */
 const canEdit = computed(() => auth('quote_edit')),
 	canExport = computed(() => auth('quote_export'));
 const locked = computed(() => !canEdit.value || quote.value?.state !== 'draft');
+/** 校对价格回导按已修改、仍待补全、未修改三组展示，便于确认人工修改及未完成报价的产品。 */
 const changedReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => row.changed) || []),
 	pendingReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => row.pending && !row.changed) || []),
 	unchangedReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => !row.changed && !row.pending) || []);
 const options = computed(() => quote.value!.body.duct_options);
 const isAuto = computed(() => quote.value?.body.recognition_mode === 'auto_v1');
+/** AI 清单处于 pending 时必须人工核验才能试算；未知名称计数帮助报价员检查识别失败项目。 */
 const aiReviewPending = computed(() => quote.value?.body.ai_review_status === 'pending');
+/** AI 草稿的未保存修改也立即要求重新核验，无需先保存才能显示核验入口。 */
+const aiReviewRequired = computed(() => !!quote.value?.body.ai_review_status && (aiReviewPending.value || dirty.value));
 const aiUnknownNameCount = computed(() => quote.value?.body.rows.filter((row) => row.name === '待识别材料').length || 0);
+/** 按未排除行决定整单风管/设备条件是否显示；清单识别摘要仍保留每类数量，未知产品单独展示。 */
 const hasDuctRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && row.category === '风管'));
 const hasEquipmentRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && row.category && row.category !== '风管'));
 const recognitionSummary = computed(() => {
@@ -847,6 +876,7 @@ const recognitionSummary = computed(() => {
 		rows.filter((row) => row.category && row.category !== '风管').length
 	} 项 / 待识别 ${rows.filter((row) => !row.category).length} 项`;
 });
+/** 设备或混合模式使用设备整单条件，风管报价保留风管条件；前端据此选择输入与显示精度。 */
 const isEquipment = computed(() => ['equipment_v1', 'mixed_v1'].includes(quote.value?.body.pricing_mode || ''));
 const orderOptions = computed(() => (isEquipment.value ? quote.value?.body.equipment_options : undefined) || options.value);
 const selectedEquipment = computed(() =>
@@ -854,6 +884,7 @@ const selectedEquipment = computed(() =>
 		? selectedRuleBody.value.rule_type === 'combination' || selectedRuleBody.value.category !== '风管'
 		: isEquipment.value && (quote.value?.body.pricing_mode === 'equipment_v1' || selectedRow.value?.category !== '风管')
 );
+/** 优先展示本行私有规则，再查共用规则引用和上次匹配结果。未试算时只有名称/单位唯一且无适用条件的规则才直接展示，条件匹配交由引擎判断。 */
 const selectedRuleBody = computed(() => {
 	const row = selectedRow.value;
 	if (row?.product_rule) return row.product_rule;
@@ -870,12 +901,13 @@ const selectedRuleBody = computed(() => {
 	const candidates = productRules.value.filter(
 		(rule) => activeProductRule(rule.family)?.id === rule.id && sameName(rule.body) && normalizeUnit(rule.body.unit) === normalizeUnit(row.unit)
 	);
-	// Display an unambiguous rule before calculation; conditional matching stays in the pricing engine.
+	// 未试算时只展示无歧义的规则；带条件的实际匹配仍由报价引擎判断。
 	return candidates.length === 1 && !Object.keys(candidates[0].body.conditions || {}).length ? candidates[0].body : undefined;
 });
 const selectedCustomParameters = computed(() =>
 	selectedRuleBody.value?.rule_type === 'formula' ? selectedRuleBody.value.custom_cost?.parameters || [] : []
 );
+/** 按本行规则生成参数表单：公式仅展示被引用的尺寸，面积/周长带出宽高；组合展示公共尺寸，普通产品使用已有类别字段。 */
 const selectedFields = computed<{ key: string; label: string; choices?: string[][]; placeholder?: string }[]>(() => {
 	if (selectedRuleBody.value?.rule_type === 'formula') {
 		const variables = new Set(
@@ -898,6 +930,7 @@ const selectedFields = computed<{ key: string; label: string; choices?: string[]
 		  )
 		: rowFields;
 });
+/** 正文改变即标记未保存；当前行和计算行按相同索引对应，参数修改后显示的选型仍属于上次结果。 */
 const dirty = computed(() => !!quote.value && JSON.stringify(quote.value.body) !== baseline.value);
 const selectedRow = computed(() => quote.value?.body.rows[selected.value]),
 	selectedResult = computed(() => quote.value?.result?.rows[selected.value]);
@@ -905,7 +938,9 @@ const selectedFan = computed(() => selectedResult.value?.detail?.selected_fan);
 const selectedFanDisplayName = computed(() =>
 	[selectedFan.value?.family, selectedFan.value?.model].filter((value, index, values) => value && values.indexOf(value) === index).join(' · ')
 );
+/** 导出入口要求已有结果、正文未修改、结果未过期且未归档；正式导出还需后端检查待确认项目、指标版本及模板许可。 */
 const exportable = computed(() => !!quote.value?.result && !dirty.value && !quote.value?.result_stale && quote.value?.state !== 'archived');
+/** 整单费用以后台结果为准；标明已含于行价的法兰、配件、税费和设备运费，避免阅读汇总时重复相加。 */
 const feeLabels = [
 	['equipment_freight', '设备运费'],
 	['aggregate_flanges', '整单法兰（已含）'],
@@ -931,9 +966,11 @@ const visibleFees = computed(() =>
 		: feeLabels
 );
 const totalDigits = computed(() => (quote.value?.body.pricing_mode === 'equipment_v1' ? 0 : 1));
+/** 风管行金额保留一位小数，设备行以整数元展示；这只是展示精度，取整由计算引擎完成。 */
 function rowDigits(index: number) {
 	return isEquipment.value && (quote.value?.body.pricing_mode === 'equipment_v1' || quote.value?.body.rows[index]?.category !== '风管') ? 0 : 1;
 }
+/** 每个指标系列先取已生效的最新发布/停用版本，再检查发布状态和截止日期；最新版本失效时不会回退旧价，只有唯一可用系列才作为界面参考。 */
 function activeResource(kind: string) {
 	const day = new Date().toLocaleDateString('sv-SE'),
 		families = new Map<string, Catalog>();
@@ -947,22 +984,26 @@ function activeResource(kind: string) {
 const activeCatalog = computed(() => activeResource('duct_catalog'));
 const activeEquipment = computed(() => activeResource('equipment_catalog'));
 const activeInstallation = computed(() => activeResource('installation_catalog')?.body as unknown as InstallationCatalogBody | undefined);
+/** 付款方案跟随生效材料指标与是否安装选择；自动识别的纯风管清单使用风管付款方案，混合/设备清单使用设备方案。 */
 const orderPaymentTerms = computed(() =>
 	((!isEquipment.value || (isAuto.value && !hasEquipmentRows.value) ? activeCatalog.value : activeEquipment.value)?.body.payment_terms || []).filter(
 		(t) => t.mode === (quote.value?.body.installation_options?.included ? 'with_install' : 'no_install')
 	)
 );
+/** 混合报价同步设备整单含税、付款和安装状态到风管默认条件，保证同一订单使用统一结算口径。 */
 function syncEquipment() {
 	if (quote.value?.body.pricing_mode !== 'mixed_v1' || !quote.value.body.equipment_options) return;
 	options.value.tax_included = quote.value.body.equipment_options.tax_included;
 	options.value.payment_option = quote.value.body.equipment_options.payment_option;
 	options.value.include_installation = !!quote.value.body.installation_options?.included;
 }
+/** 把唯一的整单运费选择同步到风管和设备选项；不清除设备每台/每个已填写运费，方便切回含运费。 */
 function freightChanged() {
 	if (!quote.value || quote.value.body.include_freight == null) return;
 	options.value.include_freight = quote.value.body.include_freight;
 	if (quote.value.body.equipment_options) quote.value.body.equipment_options.include_freight = quote.value.body.include_freight;
 }
+/** 同步整单是否安装并切换对应现金方案；原非现金付款方案需重新确认，同时提示安装指标缺失情况。 */
 function installationChanged() {
 	if (!quote.value) return;
 	const included = !!quote.value.body.installation_options?.included;
@@ -977,6 +1018,7 @@ function installationChanged() {
 	if (included && !activeInstallation.value) ElMessage.warning('安装费暂时无法试算：请负责人先到“指标管理 → 安装指标”发布一个生效版本');
 	else if (!options.value.payment_option) ElMessage.warning('安装前后的付款方案不同，请重新选择整单付款方式');
 }
+/** 按引擎返回的计价数量/单位显示“数量 × 单价”，缺少返回字段时回退到客户工程量或设备数量，保留待确认金额。 */
 function materialSummary(index: number) {
 	const row = quote.value!.body.rows[index],
 		result = quote.value?.result?.rows[index],
@@ -988,6 +1030,7 @@ function materialSummary(index: number) {
 		rowDigits(index)
 	)} 元`;
 }
+/** 展示需另计的角钢/圆法兰金额，并说明最终材料合计，便于核对主体单价与完整行金额的差异。 */
 function materialExtraSummary(index: number) {
 	const result = quote.value?.result?.rows[index],
 		parts: string[] = [];
@@ -998,27 +1041,29 @@ function materialExtraSummary(index: number) {
 	if (parts.length && result?.amount != null) parts.push(`材料合计 ${money(result.amount, rowDigits(index))} 元`);
 	return parts.join('；');
 }
+/** AI 尚未形成试算时暂不把原始核验理由用于报价状态高亮；普通清单或已有结果时允许显示核对提醒。 */
 function canShowReviewReason() {
 	return !quote.value?.body.ai_review_status || !!quote.value?.result;
 }
+/** 按最新规则试算状态读取有效核验提示，避免已计算行、操作按钮和明细继续使用旧提醒。 */
+function rowReviewReason(index: number) {
+	return currentReviewReason(quote.value?.body.rows[index], quote.value?.result?.rows[index], canShowReviewReason());
+}
+/** 材料待确认、安装待确认或允许显示的核验理由均需关注，不能只看材料是否已有价格。 */
 function rowNeedsAttention(index: number) {
 	const result = quote.value?.result?.rows[index];
-	return result?.status === 'pending' || result?.installation_status === 'pending'
-		|| (canShowReviewReason() && !!quote.value?.body.rows[index]?.attributes.review_reason);
+	return result?.status === 'pending' || result?.installation_status === 'pending' || !!rowReviewReason(index);
 }
+/** 排除行弱化显示，待确认材料/安装或有核验提醒的行高亮，辅助逐行处理问题。 */
 function rowClass({ row, rowIndex }: { row: QuoteRow; rowIndex: number }) {
-	const result = quote.value?.result?.rows[rowIndex];
-	return row.excluded
-		? 'excluded-row'
-		: result?.status === 'pending' || result?.installation_status === 'pending'
-			|| (canShowReviewReason() && row.attributes.review_reason)
-		? 'pending-row'
-		: '';
+	return row.excluded ? 'excluded-row' : rowNeedsAttention(rowIndex) ? 'pending-row' : '';
 }
+/** 记录选中行的索引并打开参数/明细抽屉，使输入、来源和上次计算结果在同一行对应。 */
 function openRow(row: QuoteRow) {
 	selected.value = quote.value!.body.rows.indexOf(row);
 	drawer.value = true;
 }
+/** 按当前行已有规则和生效共用系列打开配置；本行私有规则与共用引用分别传入，便于保持引用关系。 */
 function openProductRule(row: QuoteRow) {
 	selected.value = quote.value!.body.rows.indexOf(row);
 	const body = selectedRuleBody.value;
@@ -1030,6 +1075,7 @@ function openProductRule(row: QuoteRow) {
 			: undefined;
 	productRuleDialog.value?.open(row, body, family);
 }
+/** 查询某规则系列已到生效日的最新发布/停用版本，只有仍处于发布且未过期时才可引用，失效不回退旧规则。 */
 function activeProductRule(family: string) {
 	const date = new Date().toLocaleDateString('sv-SE');
 	const latest = productRules.value
@@ -1037,6 +1083,7 @@ function activeProductRule(family: string) {
 		.sort((a, b) => b.version - a.version)[0];
 	return latest?.status === 'published' && (!latest.body.effective_to || latest.body.effective_to >= date) ? latest : undefined;
 }
+/** 依据对象或稳定 row_id 找到目标行，应用共用系列引用或本单规则，并保存整单。普通单继续试算，AI 单修改后需重新核验；失败时保留输入供重试。 */
 async function applyProductRule(definition: { body: ProductRuleBody; family?: string; row: QuoteRow }) {
 	if (!quote.value || locked.value) return false;
 	const { body, family } = definition;
@@ -1067,6 +1114,7 @@ async function applyProductRule(definition: { body: ProductRuleBody; family?: st
 	if (body.rule_type !== 'alias' && body.unit === '㎡' && !row.quantity) row.quantity = row.engineering_quantity;
 	selected.value = index;
 	drawer.value = false;
+	/** AI 草稿的产品规则修改同样属于输入变化，需要先保存并重新人工核验，不能直接沿用旧审批。 */
 	const requiresAiReview = !!quote.value.body.ai_review_status;
 	const saved = await save(!requiresAiReview);
 	if (!saved && quote.value?.id === quoteId && quote.value.body.rows[index]) Object.assign(definition.row, quote.value.body.rows[index]);
@@ -1079,12 +1127,14 @@ async function applyProductRule(definition: { body: ProductRuleBody; family?: st
 	}
 	return saved;
 }
+/** 取消本行私有规则及共用引用，恢复自动匹配；实际重新识别和计算仍需后续保存或试算。 */
 function clearProductRule() {
 	if (!selectedRow.value || locked.value) return;
 	delete selectedRow.value.product_rule;
 	delete selectedRow.value.product_rule_family;
 	ElMessage.success('已恢复自动匹配，请重新识别或保存试算');
 }
+/** 将全新产品的计算轨迹变量转为中文参数名称，便于查看本次公式与实际参数的对应关系。 */
 function formulaTraceExpression(expression: string) {
 	if (!selectedResult.value?.detail?.formula_costs) return expression;
 	const labels: Record<string, string> = {
@@ -1102,6 +1152,7 @@ function formulaTraceExpression(expression: string) {
 		.replace(/\*/g, ' × ')
 		.replace(/\//g, ' ÷ ');
 }
+/** 追加空白产品和安装条件；自动/设备工作台不预设品类与单位，打开抽屉供报价员确认。 */
 function addRow() {
 	const row = blankRow();
 	row.installation = blankInstallation();
@@ -1113,12 +1164,15 @@ function addRow() {
 	selected.value = quote.value!.body.rows.length - 1;
 	drawer.value = true;
 }
+/** 成品状态调整后补齐缺失管型默认值，避免未设定类型导致表单无选项。 */
 function stateChanged() {
 	if (!options.value.shape) options.value.shape = 'semi_unspecified';
 }
+/** 以报价编号切换工作台，具体版本读取由路由监听触发。 */
 async function navigate(id: string) {
 	await router.push({ path: '/quotation/workbench/index', query: { id } });
 }
+/** 读取服务端当前版本，补齐历史安装字段，再建立正文基线并关闭旧行抽屉，保证后续保存使用最新 revision。 */
 async function loadQuote(id: string) {
 	const value = await quoteApi.detail(id);
 	prepareInstallation(value.body);
@@ -1126,6 +1180,7 @@ async function loadQuote(id: string) {
 	baseline.value = JSON.stringify(value.body);
 	drawer.value = false;
 }
+/** 并行加载各类指标和产品规则，再按路由读取报价；没有编号时显示列表入口，失败时显式提示。 */
 async function initialize() {
 	busy.value = true;
 	failed.value = false;
@@ -1140,6 +1195,7 @@ async function initialize() {
 		busy.value = false;
 	}
 }
+/** 新建 auto_v1 空白草稿并进入工作台，保存后由引擎按行识别产品，不要求整单预选类型。 */
 async function createBlank() {
 	busy.value = true;
 	try {
@@ -1151,9 +1207,10 @@ async function createBlank() {
 		busy.value = false;
 	}
 }
+/** 保存可选地继续试算：先检查 AI 核验与整单运费选择，写入后重新读取行 ID 和修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
 async function save(calculate: boolean) {
 	if (!quote.value) return false;
-	if (calculate && aiReviewPending.value) {
+	if (calculate && aiReviewRequired.value) {
 		ElMessage.warning('请先人工核验AI清单');
 		return false;
 	}
@@ -1165,11 +1222,12 @@ async function save(calculate: boolean) {
 	busy.value = true;
 	try {
 		const id = quote.value.id;
+		/** 修改正文后重新保存会使旧试算失效；读取服务端数据后再决定是否还能按当前核验状态继续计算。 */
 		if (dirty.value || quote.value.body.ai_review_status !== 'approved') {
 			const saved = await quoteApi.save(id, quote.value.body, quote.value.revision);
 			quote.value.revision = saved.revision;
 			quote.value.result = null;
-			// Reload row IDs and clear the dirty baseline before a possible calculation failure.
+			// 在后续试算可能失败之前，先重新读取行 ID 并更新已保存基线。
 			await loadQuote(id);
 		}
 		if (calculate) {
@@ -1190,21 +1248,41 @@ async function save(calculate: boolean) {
 		busy.value = false;
 	}
 }
+/** 一次确认后按当前修订保存、记录人工核验并试算；未修改且已核验时直接试算，失败不会继续后续步骤。 */
 async function approveAi() {
-	if (!quote.value || !aiReviewPending.value) return;
-	if (dirty.value && !(await save(false))) return;
+	if (!quote.value || locked.value || !quote.value.body.ai_review_status || busy.value || saving.value || reviewingAi.value) return;
+	if (quote.value.body.include_freight == null) {
+		ElMessage.warning('请先选择整单是否含运费');
+		return;
+	}
+	const id = quote.value.id,
+		revision = quote.value.revision,
+		reviewedBody = JSON.stringify(quote.value.body);
+	// 等待人工确认时仅防重复点击；提交请求后再显示加载遮罩，避免遮住确认按钮。
+	reviewingAi.value = true;
 	try {
-		await confirm('请确认已对照客户原始资料核对全部AI清单行，包括遗漏、规格、数量和单位。');
-		busy.value = true;
-		await quoteApi.approveAi(quote.value.id, quote.value.revision);
-		await loadQuote(quote.value.id);
-		ElMessage.success('人工核验已记录，现在可以试算');
+		if (aiReviewRequired.value) {
+			await confirm('请确认已对照客户原始资料核对全部AI清单行，包括遗漏、规格、数量和单位。确认后将保存本次修改、记录人工核验并自动试算。');
+			if (!quote.value || quote.value.id !== id || quote.value.revision !== revision || JSON.stringify(quote.value.body) !== reviewedBody) {
+				ElMessage.warning('核验期间内容已变化，请核对当前内容后重新确认');
+				return;
+			}
+			if (dirty.value && !(await save(false))) return;
+			busy.value = true;
+			if (!quote.value || quote.value.id !== id || locked.value) return;
+			await quoteApi.approveAi(id, quote.value.revision);
+			await loadQuote(id);
+		}
+		if (!quote.value || quote.value.id !== id) return;
+		await save(true);
 	} catch (error) {
 		report(error);
 	} finally {
+		reviewingAi.value = false;
 		busy.value = false;
 	}
 }
+/** 下载绑定当前已保存版本的 AI 待核验清单；页面有未保存输入时先阻止，避免离线文件与草稿内容不同。 */
 async function downloadStandard() {
 	if (!quote.value) return;
 	if (dirty.value) {
@@ -1218,6 +1296,7 @@ async function downloadStandard() {
 	}
 }
 
+/** AI 字段核验回导仅针对可编辑 AI 草稿，并要求页面已保存，保证下载、校验和回导处于同一版本。 */
 function chooseAiInputFile() {
 	if (!quote.value || locked.value || !quote.value.body.ai_review_status) return;
 	if (dirty.value) {
@@ -1227,6 +1306,7 @@ function chooseAiInputFile() {
 	aiInputFile.value?.click();
 }
 
+/** 记录待回导文件及目标报价修订号，先上传 .xlsx 生成字段变化预览；此阶段不调用 AI 重识别，也不改变单据或价格。 */
 async function previewAiInputFile(event: Event) {
 	const input = event.target as HTMLInputElement,
 		file = input.files?.[0];
@@ -1256,6 +1336,7 @@ async function previewAiInputFile(event: Event) {
 	}
 }
 
+/** 确认预览后再次检查报价 ID、revision 和页面未保存状态，避免把旧文件覆盖新草稿；更新原单后仍需重新人工核验再试算。 */
 async function applyAiInputFile() {
 	if (!quote.value || !aiInputPreview.value?.change_count || !aiInputTarget.value || locked.value || aiInputBusy.value) return;
 	if (dirty.value || quote.value.id !== aiInputTarget.value.id || quote.value.revision !== aiInputTarget.value.revision) {
@@ -1268,7 +1349,7 @@ async function applyAiInputFile() {
 		await quoteApi.applyAiInputImport(aiInputTarget.value.id, aiInputTarget.value.revision, aiInputPreview.value.import_id);
 		aiInputDialog.value = false;
 		await loadQuote(aiInputTarget.value.id);
-		ElMessage.success('已校验清单已更新到原草稿，请点击“人工核验完成”后再试算');
+		ElMessage.success('已校验清单已更新到原草稿，请点击“核验完成并试算”');
 	} catch (error) {
 		const detail = error as { msg?: string; message?: string };
 		aiInputError.value = detail?.msg || detail?.message || '更新草稿失败，请刷新草稿后重新上传';
@@ -1277,6 +1358,7 @@ async function applyAiInputFile() {
 		aiInputBusy.value = false;
 	}
 }
+/** 按资料索引下载当前 AI 报价的原始客户资料，供人工核验产品、规格、数量和遗漏。 */
 async function downloadAiSource(index: number, filename: string) {
 	if (!quote.value) return;
 	try {
@@ -1285,6 +1367,7 @@ async function downloadAiSource(index: number, filename: string) {
 		report(error);
 	}
 }
+/** 先保存页面输入，再让后端重新识别草稿已有行，读取更新后的类别并提示风管、设备和待识别数量。 */
 async function autoClassify() {
 	if (!quote.value || locked.value) return;
 	if (dirty.value && !(await save(false))) return;
@@ -1301,6 +1384,7 @@ async function autoClassify() {
 		busy.value = false;
 	}
 }
+/** 从已保存版本创建新的报价版本，保留历史结果和文件；未保存输入不带入修订版，切换前重设离开提示基线。 */
 async function revise() {
 	if (!quote.value) return;
 	try {
@@ -1314,6 +1398,7 @@ async function revise() {
 		report(error);
 	}
 }
+/** 正式导出确认后锁定当前版本；草稿校对版保留待确认标记并可编辑。生成文件后重新读取报价状态与导出记录，再下载对应文件。 */
 async function exportQuote(kind: string) {
 	if (!quote.value) return;
 	try {
@@ -1337,11 +1422,13 @@ async function exportQuote(kind: string) {
 	}
 }
 
+/** 已有可用试算结果且草稿可编辑时，允许选择人工价格校对版，避免回导到锁定或结果过期版本。 */
 function chooseReviewFile() {
 	if (!quote.value || !exportable.value || locked.value) return;
 	reviewFile.value?.click();
 }
 
+/** 上传 Excel 价格校对版生成人工修改与系统派生金额的预览，先显示差异供核对，尚不应用。 */
 async function previewReviewFile(event: Event) {
 	const input = event.target as HTMLInputElement,
 		file = input.files?.[0];
@@ -1358,6 +1445,7 @@ async function previewReviewFile(event: Event) {
 	}
 }
 
+/** 把确认的人工价格回导应用到当前修订版，读取重新汇总的材料、安装和整单结果，并提示是否仍有待确认项。 */
 async function applyReviewFile() {
 	if (!quote.value || !reviewPreview.value?.change_count) return;
 	busy.value = true;
@@ -1373,6 +1461,7 @@ async function applyReviewFile() {
 	}
 }
 
+/** 根据已保存的导出记录下载历史文件，使用原文件编号而不重新计算历史报价。 */
 async function download(item: ExportRecord) {
 	try {
 		await quoteApi.download(item.id, item.filename);
@@ -1380,6 +1469,7 @@ async function download(item: ExportRecord) {
 		report(error);
 	}
 }
+/** 报价正文与已保存基线不同时，确认是否放弃修改；取消保持当前编辑页面。 */
 async function leave() {
 	if (!dirty.value) return true;
 	try {
@@ -1389,15 +1479,18 @@ async function leave() {
 		return false;
 	}
 }
+/** 返回工作台列表，路由离开守卫仍会处理未保存修改。 */
 async function back() {
 	await router.push('/quotation/workbench/index');
 }
+/** 关闭浏览器或刷新时提示未保存报价输入，补充路由跳转之外的离开保护。 */
 function beforeUnload(event: BeforeUnloadEvent) {
 	if (dirty.value) {
 		event.preventDefault();
 		event.returnValue = '';
 	}
 }
+/** 路由离开、切换报价编号及浏览器关闭统一保护未保存输入；编号变化后重新加载当前版本。 */
 onBeforeRouteLeave(leave);
 onBeforeRouteUpdate(async (to, from) => to.query.id === from.query.id || (await leave()));
 watch(() => route.query.id, initialize);
@@ -1409,6 +1502,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 </script>
 
 <style scoped>
+/* 工作台行参数抽屉、风机候选与原始来源/计算明细的局部布局，使人工核对时能同时查看需求和选型结果。 */
 .ai-input-changes {
 	margin-top: 12px;
 }

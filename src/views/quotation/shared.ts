@@ -1,20 +1,26 @@
+/** 报价页面共享的展示、交互和风管字段配置；这里只整理输入与显示，价格由后端报价引擎计算。 */
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { QuoteRow } from '/@/types/quotation';
 
+/** 统一显示报价单与指标版本状态，便于工作台、历史记录和指标管理使用相同中文名称。 */
 export const stateLabels: Record<string, string> = { draft: '草稿', final: '已定稿', archived: '已归档', published: '已发布', retired: '已停用' };
+/** 格式化金额并保留指定小数位。空值显示“待确认”，避免把尚未形成的价格误显示为 0；默认一位小数用于风管。 */
 export function money(value: string | number | null | undefined, digits = 1) {
 	return value === null || value === undefined
 		? '待确认'
 		: Number(value).toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
+/** 统一显示接口或业务操作失败原因；用户主动取消、关闭确认框时不再弹出错误提示。 */
 export function report(error: unknown) {
 	if (error === 'cancel' || error === 'close') return;
 	const e = error as { msg?: string; message?: string };
 	ElMessage.error(e?.msg || e?.message || '操作未完成，请检查服务是否启动后重试');
 }
+/** 对删除、发布、导出等需要人工核对的动作显示确认框；取消会拒绝 Promise，由调用方决定中止流程。 */
 export async function confirm(message: string) {
 	await ElMessageBox.confirm(message, '请确认', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' });
 }
+/** 创建手工输入的空白风管行，工程量和设备数量分别保留。自动识别工作台会再清空默认类别和单位供报价员确认。 */
 export function blankRow(): QuoteRow {
 	return {
 		name: '',
@@ -30,6 +36,7 @@ export function blankRow(): QuoteRow {
 		source_issue_confirmed: false,
 	};
 }
+/** 材料、法兰、管型和成品状态的选项编码与后端约定一致；中文名称仅供页面展示。 */
 export const materials = [
 	['galvanized', '镀锌板（按整单锌层）'],
 	['galvanized_40', '40g 镀锌板'],
@@ -51,6 +58,7 @@ export const productStates = [
 	['semi', '半成品'],
 	['finished', '成品'],
 ];
+/** 风管行参数抽屉的字段定义。本行填写的材质、尺寸、法兰和状态用于覆盖整单默认条件。 */
 export const rowFields = [
 	{ key: 'material', label: '材质', choices: materials },
 	{ key: 'thickness', label: '厚度（mm）' },
@@ -82,6 +90,7 @@ export const rowFields = [
 	{ key: 'diameter', label: '圆风管直径（mm）' },
 	{ key: 'round_flange_count', label: '圆法兰数量（个）', placeholder: '无数量时按面积折算' },
 ];
+/** 风管 Excel 列映射字段表，列出的名称用于导入时人工核对来源列，避免使用客户清单中的旧价格。 */
 export const mappingFields = [
 	['name', '产品名称（必选）'],
 	['spec', '规格 / 厚度描述'],

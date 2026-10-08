@@ -1,6 +1,6 @@
 <script setup lang="ts" name="authredirect">
 import request from '/@/utils/request';
-import { Session } from '/@/utils/storage';
+import { Session, STORAGE_KEYS } from '/@/utils/storage';
 import { useUserInfo } from '/@/stores/userInfo';
 import { useMessageBox } from '/@/hooks/message';
 import { useUrlSearchParams } from '@vueuse/core';
@@ -70,7 +70,12 @@ const handleSocialLogin = async (state: string, code: string) => {
 	await useUserInfo().loginBySocial(state as SocialLoginEnum, code);
 
 	// 通知父窗口登录成功
-	notifyParentWindow({ type: 'social-login-success' });
+	notifyParentWindow({
+		type: 'social-login-success',
+		token: Session.getToken(),
+		refreshToken: Session.get(STORAGE_KEYS.REFRESH_TOKEN),
+		basicAuth: Session.get('basicAuth'),
+	});
 
 	// 延迟关闭窗口，确保消息已发送
 	setTimeout(() => window.close(), 100);

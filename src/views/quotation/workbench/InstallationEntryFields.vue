@@ -1,4 +1,5 @@
 <template>
+	<!-- 单项安装条件表单，同时用于产品行与独立安装项目。根据产品类别和安装地区提供项目选择、人工单价及必要的辅材或功率参数。 -->
 	<el-form :disabled="locked" label-position="top" class="q-grid two installation-entry-form" @submit.prevent>
 		<el-alert
 			v-if="status === 'pending' && reason"
@@ -64,9 +65,11 @@
 </template>
 
 <script setup lang="ts">
+/** 单项安装条件表单，同时用于产品行与独立安装项目。根据产品类别和安装地区提供项目选择、人工单价及必要的辅材或功率参数。 */
 import { computed } from 'vue';
 import type { InstallationCatalogBody, InstallationEntry, InstallationOptions, InstallationProject } from '/@/types/quotation';
 
+/** entry 是父组件传入的当前编辑对象；locked 控制只读，extra 区分独立安装项，status/reason 展示上次计算结果。 */
 const props = defineProps<{
 	entry: InstallationEntry;
 	options: InstallationOptions;
@@ -80,6 +83,7 @@ const props = defineProps<{
 	reason?: string;
 }>();
 
+/** 省区名称统一后按类别筛选安装指标项目，显式选择的项目保留并提示类别不匹配，避免自动套用相近项目。 */
 const region = computed(() => props.options.region.replace(/省$/, '').replace(/壮族自治区$/, ''));
 const editorCategory = computed(() => (props.rowCategory || props.entry.category || '').trim());
 const editorKind = computed(() => {
@@ -95,11 +99,13 @@ const projects = computed(() =>
 const selectedProject = computed(() => props.catalog?.projects.find((project) => project.id === props.entry.project_id));
 const projectKindMismatch = computed(() => !!selectedProject.value && !!editorKind.value && selectedProject.value.kind !== editorKind.value);
 const isDuctEditor = computed(() => editorKind.value === 'duct');
+/** 结合产品名称、规格和安装项文本识别风机编辑场景；陕西分档风机显示需人工确认的功率字段。 */
 const productText = computed(() => [props.rowName, props.rowSpec, props.rowCategory, props.entry.name, props.entry.category].filter(Boolean).join(' '));
 const isFanEditor = computed(() => /风机|通风机|HTF|HTFC|SWF|GXF|HL3/i.test(productText.value));
 const showFanPower = computed(
 	() => editorKind.value === 'equipment' && region.value === '陕西' && (isFanEditor.value || !!selectedProject.value?.power_prices?.length)
 );
+/** 陕西风管需确认辅材类型；指标覆盖地区以外若含辅材，则要求填写人工辅材单价。 */
 const showShaanxiAuxiliary = computed(() => isDuctEditor.value && region.value === '陕西' && props.options.include_auxiliaries);
 const showOtherAuxiliaryPrice = computed(
 	() =>
@@ -108,11 +114,13 @@ const showOtherAuxiliaryPrice = computed(
 		props.options.include_auxiliaries &&
 		!['贵州', '四川', '云南', '广西', '陕西'].includes(region.value)
 );
+/** 选择项目之前先明确产品类别和整单安装省区；留空表示交由试算匹配，有歧义仍需人工选定。 */
 const projectPlaceholder = computed(() => {
 	if (!editorKind.value) return '请先确认产品品类';
 	if (!region.value) return '请先填写整单安装省区';
 	return '留空则试算时匹配；有歧义须人工选定';
 });
+/** 显示安装项目的未税销售单价或功率分档单价，帮助报价员核对选中的原表项目。 */
 const price = (project: InstallationProject) =>
 	project.power_prices
 		? '<1.5 / 1.5–17.5 / >17.5kW：' + project.power_prices.join(' / ') + '元/' + project.unit

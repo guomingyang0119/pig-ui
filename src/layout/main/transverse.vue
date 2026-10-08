@@ -1,7 +1,7 @@
 <template>
 	<el-container class="layout-container flex-center layout-backtop">
 		<LayoutHeader />
-		<LayoutMain ref="layoutMainRef" />
+		<LayoutMain ref="layoutMainRef" @view-ready="initScrollBarHeight" />
 	</el-container>
 </template>
 
@@ -14,7 +14,6 @@ const LayoutMain = defineAsyncComponent(() => import('/@/layout/component/main.v
 
 const layoutMainRef = ref<InstanceType<typeof LayoutMain>>();
 const { themeConfig } = storeToRefs(useThemeConfig());
-const route = useRoute();
 
 const updateScrollbar = () => {
 	layoutMainRef.value?.layoutMainScrollbarRef?.update();
@@ -30,10 +29,6 @@ const initScrollBarHeight = async () => {
 };
 
 onMounted(() => {
-	initScrollBarHeight();
-});
-
-watch(() => route.path, () => {
 	initScrollBarHeight();
 });
 

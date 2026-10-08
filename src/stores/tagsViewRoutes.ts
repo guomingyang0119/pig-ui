@@ -42,7 +42,7 @@ export const useTagsViewRoutes = defineStore('tagsViewRoutes', {
 		strategies: [
 			{
 				key: 'tagsViewRoutes', //自定义 Key值
-				storage: localStorage, // 选择存储方式
+				storage: sessionStorage, // 菜单和收藏跟随当前标签页的账号
 			},
 		],
 	},

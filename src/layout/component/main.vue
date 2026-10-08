@@ -6,7 +6,7 @@
 			wrap-class="layout-main-scroll"
 			view-class="layout-main-scroll"
 		>
-			<LayoutParentView />
+			<LayoutParentView @view-ready="updateLayoutAfterView" />
 		</el-scrollbar>
 		<el-backtop :target="setBacktopClass" />
 		<check-token />
@@ -20,10 +20,17 @@ import { NextLoading } from '/@/utils/loading';
 
 const LayoutParentView = defineAsyncComponent(() => import('/@/layout/routerView/parent.vue'));
 const CheckToken = defineAsyncComponent(() => import('/@/components/CheckToken/index.vue'));
+const emit = defineEmits(['view-ready']);
 
 const layoutMainScrollbarRef = ref();
 const { themeConfig } = storeToRefs(useThemeConfig());
 const { isTagsViewCurrenFull } = storeToRefs(useTagsViewRoutes());
+
+const updateLayoutAfterView = async () => {
+	await nextTick();
+	layoutMainScrollbarRef.value?.update();
+	emit('view-ready');
+};
 
 const isFixedHeader = computed(() => themeConfig.value.isFixedHeader);
 

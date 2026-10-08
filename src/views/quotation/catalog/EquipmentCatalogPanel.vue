@@ -1,4 +1,5 @@
 <template>
+	<!-- 设备指标维护面板：从已核对基准数据准备草稿，负责人保存、校验和发布版本；已发布指标只读，调价通过新版本执行。 -->
 	<div v-loading="busy">
 		<div class="q-section-head" style="margin: 14px 0">
 			<div>
@@ -129,6 +130,7 @@
 	</div>
 </template>
 <script setup lang="ts">
+/** 设备指标维护面板：从已核对基准数据准备草稿，负责人保存、校验和发布版本；已发布指标只读，调价通过新版本执行。 */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -139,12 +141,15 @@ import { equipmentRates, equipmentComponents, equipmentVariables, equipmentFormu
 import EquipmentParameters from './EquipmentParameters.vue';
 import type { Catalog, EquipmentCatalogBody } from '/@/types/quotation';
 type EquipmentCatalog = Catalog<EquipmentCatalogBody>;
+/** 设备指标版本列表与 editing 编辑副本分开保存；baseline 用于发现未保存修改，避免直接污染列表或历史版本。 */
 const catalogs = ref<EquipmentCatalog[]>([]),
 	editing = ref<EquipmentCatalog>(),
 	busy = ref(false),
 	baseline = ref(''),
 	tab = ref('rates');
+/** 子参数弹窗中尚未应用的修改也计入 dirty，防止只比较主表正文时遗漏未保存的工况输入。 */
 const pendingParameterChange = ref(false);
+/** 只有具备 quote_manage 权限且当前为草稿时允许编辑；接口仍负责最终权限、版本及状态校验。 */
 const canManage = computed(() => auth('quote_manage'));
 const editable = computed(() => canManage.value && editing.value?.status === 'draft');
 const snapshot = () => JSON.stringify(editing.value?.body);
@@ -154,15 +159,18 @@ const priceGroups = [
 	{ key: 'motors' as const, label: '电机成本', price: 'cost' },
 	{ key: 'purchased' as const, label: '外购设备', price: 'cost' },
 ];
+/** 深拷贝选中指标并建立基线，保证表单修改只作用于当前编辑副本。 */
 function setEditing(item?: EquipmentCatalog) {
 	editing.value = item ? JSON.parse(JSON.stringify(item)) : undefined;
 	pendingParameterChange.value = false;
 	baseline.value = snapshot();
 }
+/** 查询资源后仅保留设备指标，优先重新选中指定版本，再更新编辑副本与保存基线。 */
 async function reload(id?: string) {
 	catalogs.value = (await quoteApi.resources<EquipmentCatalogBody>()).filter((c) => c.kind === 'equipment_catalog');
 	setEditing(catalogs.value.find((c) => c.id === id) || catalogs.value[0]);
 }
+/** 存在未保存的设备指标修改时确认是否放弃；取消返回 false，保持当前表单。 */
 async function leave() {
 	if (!dirty.value) return true;
 	try {
@@ -172,9 +180,11 @@ async function leave() {
 		return false;
 	}
 }
+/** 切换指标版本前处理未保存修改，确认后才替换当前编辑副本。 */
 async function select(item: EquipmentCatalog) {
 	if (await leave()) setEditing(item);
 }
+/** 复用已有设备草稿，或读取已核对源表数据建立未持久化编辑副本；此动作不会直接发布价格。 */
 async function seed() {
 	if (!(await leave())) return;
 	busy.value = true;
@@ -191,6 +201,7 @@ async function seed() {
 		busy.value = false;
 	}
 }
+/** 已有设备指标按 revision 保存，新建源表副本先创建资源；成功后重新读取版本，更新并发修订号和基线。 */
 async function save() {
 	if (!editing.value) return;
 	busy.value = true;
@@ -206,6 +217,7 @@ async function save() {
 		busy.value = false;
 	}
 }
+/** 携带当前修订号执行设备指标校验、发布、修订、停用等生命周期动作，完成后刷新相应版本。 */
 async function act(action: string) {
 	if (!editing.value) return;
 	try {
@@ -228,6 +240,7 @@ async function act(action: string) {
 		busy.value = false;
 	}
 }
+/** 页面关闭或刷新时，对尚未保存的指标修改触发浏览器离开提示。 */
 function beforeUnload(event: BeforeUnloadEvent) {
 	if (dirty.value) {
 		event.preventDefault();

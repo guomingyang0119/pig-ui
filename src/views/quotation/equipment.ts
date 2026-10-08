@@ -1,3 +1,4 @@
+/** 设备计价类型及中文字段字典，供设备指标维护、报价行参数和产品规则编辑共用；编码对应后端已有成本模型。 */
 export const equipmentKinds: Record<string, string> = {
 	fan: '风机',
 	fire: '防火阀',
@@ -14,7 +15,9 @@ export const equipmentKinds: Record<string, string> = {
 	elbow: '消声弯头',
 	purchased: '外购设备',
 };
+/** 客户清单的产品类别用于选择参数组；具体成本算法还由 equipment_kind 与产品规则共同确定。 */
 export const equipmentCategories = ['风管', '风机', '风阀', '百叶风口', '消声设备', '外购设备', '其他材料'];
+/** 设备成本、毛利、税费、运费门槛等指标的中文说明，帮助负责人核对已发布指标的业务含义。 */
 export const equipmentRates: Record<string, string> = {
 	gross_margin: '毛利率',
 	tax_factor: '含税系数',
@@ -44,6 +47,7 @@ export const equipmentRates: Record<string, string> = {
 	thickness_1_2_factor: '1.2mm 板厚除数',
 	angle_factor: '角钢法兰除数',
 };
+/** 设备内部成本分项的中文名称，仅用于核对计算明细，不作为客户导出的报价字段。 */
 export const equipmentComponents: Record<string, string> = {
 	frame: '阀体框架',
 	blade: '叶片',
@@ -65,6 +69,7 @@ export const equipmentComponents: Record<string, string> = {
 	splice: '拼接',
 	panel: '面板',
 };
+/** 设备及风机本体公式变量的中文含义与单位；显示转换保持原英文表达式和实际计算规则不变。 */
 export const equipmentVariables: Record<string, string> = {
 	width: '宽度（mm）',
 	height: '高度（mm）',
@@ -82,12 +87,14 @@ export const equipmentVariables: Record<string, string> = {
 	size: '机号',
 	thickness: '板厚（mm）',
 };
+/** 把公式中的已知变量和乘除符号转换为中文展示；数值（含科学计数法）及未知标识保留原文，便于与可编辑公式对照。 */
 export function equipmentFormulaInChinese(expression: string) {
 	return expression
 		.replace(/(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[a-zA-Z_][a-zA-Z0-9_]*/g, (token) => equipmentVariables[token] || token)
 		.replace(/\*/g, '×')
 		.replace(/\//g, '÷');
 }
+/** 风口实际类型与计价口径的中文枚举。常开式百叶可保留客户产品类型，再单独确认采用的计价算法。 */
 export const louverLabels: Record<string, string> = {
 	normally_open: '常开式百叶',
 	single: '单层百叶',
@@ -111,12 +118,14 @@ export const louverLabels: Record<string, string> = {
 	abs_double: 'ABS 双层百叶',
 	abs_hinged_mesh: 'ABS 门铰式风口带网',
 };
+/** 设备参数表单的配置单元：字段编码对应行属性，choices 存在时使用中文下拉选项，否则允许手工输入。 */
 export interface EquipmentField {
 	key: string;
 	label: string;
 	choices?: string[][];
 }
 
+/** 可供设备报价录入的完整参数集合，含风机工况、阀体成本和附阀核验条件；实际页面按产品类别筛选显示。 */
 export const equipmentFields: EquipmentField[] = [
 	{ key: 'equipment_kind', label: '计算类型', choices: Object.entries(equipmentKinds) },
 	{ key: 'width', label: '宽度（mm）' },
@@ -252,6 +261,7 @@ export const equipmentFields: EquipmentField[] = [
 	{ key: 'attached_valve_splice_cost', label: '附阀确认拼接费（元）' },
 ];
 
+/** 建立参数索引及类别映射，复用同一字段定义生成风机、风阀、风口、消声和外购产品的表单。 */
 const equipmentFieldByKey = new Map(equipmentFields.map((field) => [field.key, field]));
 const kindsByCategory: Record<string, string[]> = {
 	风机: ['fan'],
@@ -334,7 +344,8 @@ const fieldsByCategory: Record<string, string[]> = {
 	其他材料: ['equipment_kind', 'model'],
 };
 
-/** Only expose inputs used by the selected product family. Hidden values remain in attributes. */
+/** 仅显示选定产品类别所需的参数；隐藏字段的已有值仍保留在 attributes 中。 */
+/** 按产品类别和具体成本算法选择需要填写的参数，并限制可选计算类型。消声弯头使用人工面积，其他消声设备使用尺寸；隐藏字段仍留在 attributes 中。 */
 export function equipmentFieldsFor(category: string, kind = ''): EquipmentField[] {
 	let keys = fieldsByCategory[category] || ['equipment_kind'];
 	if (category === '消声设备' && kind === 'elbow') keys = ['equipment_kind', 'area_per_unit'];

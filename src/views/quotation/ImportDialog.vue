@@ -1,4 +1,5 @@
 <template>
+	<!-- 常规 Excel 客户清单导入：先解析所有工作表，再核对起始行、字段映射和排除原因，最终按原工作表顺序合并创建自动识别报价草稿。 -->
 	<el-dialog v-model="visible" title="导入客户清单" width="min(1040px, 94vw)" top="4vh" :close-on-click-modal="false" destroy-on-close>
 		<div class="import-workspace" v-loading="busy">
 			<div class="upload-area">
@@ -144,12 +145,14 @@
 	</el-dialog>
 </template>
 <script setup lang="ts">
+/** 常规 Excel 客户清单导入：先解析所有工作表，再核对起始行、字段映射和排除原因，最终按原工作表顺序合并创建自动识别报价草稿。 */
 import { computed, ref } from 'vue';
 import { quoteApi } from '/@/api/quotation';
 import { report } from '/@/views/quotation/shared';
 import { analyseSheet, mappingGroups, mappingWarnings } from './importMapping';
 import type { ColumnMapping } from './importMapping';
 import type { ImportResult, ImportSheet } from '/@/types/quotation';
+/** 每个工作表独立保存导入计划；空白表、人工排除表及自动关联的核对参数表有不同处理口径。 */
 interface SheetPlan {
 	sheet: ImportSheet;
 	startRow?: number;
@@ -161,6 +164,7 @@ interface SheetPlan {
 	showSource: boolean;
 }
 const emit = defineEmits<{ (e: 'created', id: string): void }>();
+/** 上传解析结果与可编辑 plans 分开保留，expanded 只控制需要展开核对的工作表，客户和项目用于新报价抬头。 */
 const visible = ref(false),
 	busy = ref(false),
 	imported = ref<ImportResult>(),
@@ -168,6 +172,7 @@ const visible = ref(false),
 	expanded = ref<string[]>([]),
 	customer = ref(''),
 	project = ref('');
+/** 整单摘要仅汇总有数据且参与报价的工作表；needsReview 检查会阻止导入的缺项，规格/数量提示单独供用户核对。 */
 const includedPlans = computed(() => plans.value.filter((p) => p.sheet.rows.length && !p.excluded));
 const includedCount = computed(() => includedPlans.value.length);
 const needsReview = computed(() => plans.value.some((p) => !!reviewIssue(p)));
@@ -185,26 +190,33 @@ const summaryLabel = computed(() => {
 	);
 	return scopeLabel(total) || '等待识别清单内容';
 });
+/** 按本表当前起始行及映射实时计算产品范围和前五条预览，人工调整列后立即反映到摘要。 */
 function profile(plan: SheetPlan) {
 	return analyseSheet(plan.sheet, plan.startRow, plan.mapping);
 }
+/** 依据本表识别范围和展开状态生成映射参数组，混合表中的共用列不会重复出现。 */
 function groups(plan: SheetPlan) {
 	return mappingGroups(profile(plan), plan.mapping, plan.expandedGroups, plan.showAllTypes);
 }
+/** 已排除或空白表不再显示产品规格提示，其余工作表提示需要核对的规格与数量映射。 */
 function warnings(plan: SheetPlan) {
 	return plan.excluded || !plan.sheet.rows.length ? [] : mappingWarnings(plan.mapping);
 }
+/** 把本表或整单的风管、设备、待识别数量整理为可读摘要，保留未知项目的存在。 */
 function scopeLabel(p: { duct: number; equipment: number; unknown: number }) {
 	return [p.duct ? `风管 ${p.duct} 行` : '', p.equipment ? `设备 ${p.equipment} 行` : '', p.unknown ? `待识别 ${p.unknown} 行` : '']
 		.filter(Boolean)
 		.join(' · ');
 }
+/** 展开或收起一组补充独立列；不修改已有映射，收起后已经选定的字段仍会显示。 */
 function toggleGroup(plan: SheetPlan, key: string) {
 	plan.expandedGroups = plan.expandedGroups.includes(key) ? plan.expandedGroups.filter((v) => v !== key) : [...plan.expandedGroups, key];
 }
+/** 检查来源列是否被其他字段占用，帮助用户避免同一数量列同时映射到多个字段。 */
 function columnUsed(plan: SheetPlan, key: string, index: number) {
 	return Object.entries(plan.mapping).some(([field, value]) => field !== key && value === index);
 }
+/** 校验本表是否可以导入：非空产品表必须有起始行、名称列和后续数据，排除表必须说明原因，列映射不能重复。自动关联的辅助表不作为产品表校验。 */
 function reviewIssue(plan: SheetPlan) {
 	if (plan.sheet.auxiliary) return '';
 	if (!plan.sheet.rows.length) return '';
@@ -215,6 +227,7 @@ function reviewIssue(plan: SheetPlan) {
 	if (new Set(mapped).size !== mapped.length) return '同一列不能映射到不同字段，请核对重复映射。';
 	return '';
 }
+/** 根据辅助表、空白表、排除决定和映射问题生成工作表状态，确保非空但未识别表头的清单不会被静默跳过。 */
 function sheetStatus(plan: SheetPlan) {
 	if (plan.sheet.auxiliary) return '核对参数 · 自动关联主表';
 	if (!plan.sheet.rows.length) return '空白表 · 自动跳过';
@@ -223,6 +236,7 @@ function sheetStatus(plan: SheetPlan) {
 	if (warnings(plan).length) return '请核对规格 / 数量';
 	return `已匹配 ${Object.values(plan.mapping).filter((v) => v != null).length} 列`;
 }
+/** 按最大原始列数生成 Excel 列字母和表头说明；表头取自动识别或人工起始行的上一行。 */
 function columns(plan: SheetPlan) {
 	const count = Math.max(0, ...plan.sheet.rows.map((r) => r.cells.length));
 	const headerRow = plan.sheet.rows.find((r) => r.number === (plan.sheet.auto_start_row || plan.startRow || 2) - 1);
@@ -237,6 +251,7 @@ function columns(plan: SheetPlan) {
 		return { index, letter, label: letter + ' · ' + (headerRow?.cells[index] || '空表头') };
 	});
 }
+/** 重置本次导入计划与报价抬头，打开空白弹窗等待选择客户清单。 */
 function open() {
 	imported.value = undefined;
 	plans.value = [];
@@ -245,6 +260,7 @@ function open() {
 	project.value = '';
 	visible.value = true;
 }
+/** 上传 Excel 获取整份文件解析结果，为每个表建立自动建议映射。核对参数表默认关联主表，其余缺项工作表自动展开提示。 */
 async function upload(event: Event) {
 	const file = (event.target as HTMLInputElement).files?.[0];
 	if (!file) return;
@@ -272,6 +288,7 @@ async function upload(event: Event) {
 		busy.value = false;
 	}
 }
+/** 把每个工作表的确认映射、起始行和排除原因一起提交；创建 auto_v1 草稿后将编号通知工作台继续补参数与试算。 */
 async function create() {
 	busy.value = true;
 	try {
@@ -299,6 +316,7 @@ async function create() {
 defineExpose({ open });
 </script>
 <style scoped lang="scss">
+/* 导入弹窗的工作表摘要、映射分组和来源预览样式；窄屏调整字段布局，便于人工逐表核对。 */
 .import-workspace {
 	max-height: 73vh;
 	overflow-y: auto;

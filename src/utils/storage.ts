@@ -33,16 +33,6 @@ export const Cookie = {
 };
 
 /**
- * 判断 key 是否需要同步写入 Cookie
- * @description token、refresh_token、deptId 在写入 sessionStorage 的同时也需要写入 Cookie，
- * 原因是请求拦截器（request.ts）通过 Cookies 读取这些值来注入请求头；
- * 普通 key 仅存 sessionStorage，不需要跨请求访问。
- */
-function isCookieBackedSessionKey(key: string) {
-	return key === STORAGE_KEYS.TOKEN || key === STORAGE_KEYS.REFRESH_TOKEN || key === STORAGE_KEYS.DEPT_ID;
-}
-
-/**
  * 为存储键统一追加应用前缀，localStorage 与 sessionStorage 共用
  * @description 已带前缀的 key 原样返回，避免重复拼接
  */
@@ -55,8 +45,7 @@ function setStorageKey(key: string) {
 
 /**
  * 安全读取并解析 sessionStorage 中的 JSON 值
- * @description Session.get 和 cookie-backed key 的兜底逻辑共用此函数，
- * 统一处理 undefined、字符串 "null"/"undefined" 及 JSON 解析异常三种异常情况。
+ * @description 统一处理 undefined、字符串 "null"/"undefined" 及 JSON 解析异常。
  * @param key sessionStorage 键名
  * @returns 解析后的值；键不存在或解析失败时返回 null
  */
@@ -110,14 +99,14 @@ export const Local = {
 };
 
 /**
- * window.sessionStorage 浏览器临时缓存
+ * window.sessionStorage 当前标签页的临时缓存，登录凭证和部门信息不与其他标签页共享
  * @method set 设置临时缓存
  * @method get 获取临时缓存
  * @method remove 移除临时缓存
  * @method clear 移除全部临时缓存
  */
 export const Session = {
-	// 与 Local 保持一致的键名前缀规则；Cookie 键保持原名，供网关和请求拦截器按原名读取
+	// 与 Local 保持一致的键名前缀规则
 	setKey(key: string) {
 		return setStorageKey(key);
 	},
@@ -126,26 +115,18 @@ export const Session = {
 		if (val === undefined || val === null) {
 			return;
 		}
-		if (isCookieBackedSessionKey(key)) {
-			Cookie.set(key, val);
-		}
 		window.sessionStorage.setItem(Session.setKey(key), JSON.stringify(val));
 	},
 	// 获取临时缓存
 	get(key: string) {
-		if (isCookieBackedSessionKey(key)) return Cookie.get(key) || getSessionStorageValue(Session.setKey(key));
 		return getSessionStorageValue(Session.setKey(key));
 	},
 	// 移除临时缓存
 	remove(key: string) {
-		if (isCookieBackedSessionKey(key)) Cookie.remove(key);
 		window.sessionStorage.removeItem(Session.setKey(key));
 	},
 	// 移除全部临时缓存
 	clear() {
-		Cookie.remove(STORAGE_KEYS.TOKEN);
-		Cookie.remove(STORAGE_KEYS.REFRESH_TOKEN);
-		Cookie.remove(STORAGE_KEYS.DEPT_ID);
 		window.sessionStorage.clear();
 	},
 	// 获取当前存储的 token
@@ -154,6 +135,6 @@ export const Session = {
 	},
 	// 获取当前的部门
 	getDeptId() {
-		return Local.get(STORAGE_KEYS.DEPT_ID) ? Local.get(STORAGE_KEYS.DEPT_ID) : '';
+		return this.get(STORAGE_KEYS.DEPT_ID) || '';
 	},
 };

@@ -1,4 +1,5 @@
 <template>
+	<!-- 报价列表复用组件：查询当前或已归档报价、按客户与项目筛选，并进入工作台执行修订、归档、恢复或删除草稿。 -->
 	<div>
 		<div class="q-section-head">
 			<el-input v-model="search" placeholder="搜索客户或项目" clearable class="q-search" aria-label="搜索报价" />
@@ -53,23 +54,28 @@
 	</div>
 </template>
 <script setup lang="ts">
+/** 报价列表复用组件：查询当前或已归档报价、按客户与项目筛选，并进入工作台执行修订、归档、恢复或删除草稿。 */
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { auth } from '/@/utils/authFunction';
 import { quoteApi } from '/@/api/quotation';
 import { stateLabels, money, report, confirm } from '/@/views/quotation/shared';
 import type { QuoteSummary } from '/@/types/quotation';
+/** 保存列表数据、关键字、归档范围和加载状态；服务端按账号权限控制可见单据，前端只做当前结果的文字筛选。 */
 const router = useRouter(),
 	items = ref<QuoteSummary[]>([]),
 	search = ref(''),
 	archived = ref(false),
 	busy = ref(false),
 	failed = ref(false);
+/** 编辑权限决定操作按钮是否展示；真正的权限与报价状态校验仍由后端动作接口执行。 */
 const canEdit = computed(() => auth('quote_edit'));
 const filtered = computed(() => items.value.filter((q) => (q.customer + ' ' + q.project).toLowerCase().includes(search.value.toLowerCase())));
+/** 使用报价唯一编号进入工作台，工作台会读取该版本的正文、试算和历史导出文件。 */
 function open(row: { id: string }) {
 	router.push({ path: '/quotation/workbench/index', query: { id: row.id } });
 }
+/** 根据当前归档开关重新查询报价摘要，失败时保留加载失败提示供用户刷新重试。 */
 async function load() {
 	busy.value = true;
 	failed.value = false;
@@ -82,6 +88,7 @@ async function load() {
 		busy.value = false;
 	}
 }
+/** 先解释操作影响，再携带修订号执行报价状态变更。修订返回新版本编号并进入新单，其他动作完成后刷新列表。 */
 async function act(row: QuoteSummary, action: string) {
 	const text: Record<string, string> = {
 		delete: '永久删除这份未导出的草稿？此操作不能恢复。',

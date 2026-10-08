@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts" name="loginSocial">
-import { Cookie, STORAGE_KEYS } from '/@/utils/storage';
+import { Session, STORAGE_KEYS } from '/@/utils/storage';
 import other from '/@/utils/other';
 import { getLoginAppList } from '/@/api/admin/social';
 import { useMessage } from '/@/hooks/message';
@@ -96,12 +96,21 @@ const winOpen = ref<Window | null>(null);
  */
 const handleMessage = (event: MessageEvent) => {
 	// 验证消息来源
-	if (event.origin !== window.location.origin) {
+	if (event.origin !== window.location.origin || !winOpen.value || event.source !== winOpen.value) {
 		return;
 	}
 
 	// 处理登录成功消息
 	if (event.data?.type === 'social-login-success') {
+		const { token, refreshToken, basicAuth } = event.data;
+		if (typeof token !== 'string' || !token || typeof refreshToken !== 'string' || !refreshToken || typeof basicAuth !== 'string' || !basicAuth) {
+			return;
+		}
+		// 仅接收本标签页打开的授权窗口返回的凭证
+		Session.clear();
+		Session.set(STORAGE_KEYS.TOKEN, token);
+		Session.set(STORAGE_KEYS.REFRESH_TOKEN, refreshToken);
+		Session.set('basicAuth', basicAuth);
 		cleanup();
 		emit('signInSuccess');
 	}
@@ -155,7 +164,7 @@ const handleClick = async (thirdpart: SocialLoginEnum) => {
 
 	resume(); // 启动轮询
 	// 打开授权窗口并存储实例
-	winOpen.value = other.openWindow(url, thirdpart, 540, 540);
+	winOpen.value = other.openWindow(url, '_blank', 540, 540);
 };
 
 // 使用 VueUse 的 useEventListener 自动管理消息监听
@@ -167,9 +176,6 @@ const { pause, resume } = useIntervalFn(
 		// 检查弹出窗口是否已关闭
 		if (winOpen.value && winOpen.value.closed) {
 			cleanup();
-			if (Cookie.get(STORAGE_KEYS.TOKEN)) {
-				emit('signInSuccess');
-			}
 		}
 	},
 	1000, // 1秒检查一次

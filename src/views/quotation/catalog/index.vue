@@ -1,5 +1,6 @@
 <template>
 	<main class="quotation-page" v-loading="busy">
+		<!-- 指标管理入口：风管、设备和安装分别维护版本，风管页面还提供公式中文对照、正式模板确认开关及报价审计查询。 -->
 		<header class="q-header">
 			<div>
 				<h1>报价指标管理</h1>
@@ -191,6 +192,7 @@
 	</main>
 </template>
 <script setup lang="ts" name="QuotationCatalog">
+/** 指标管理入口：风管、设备和安装分别维护版本，风管页面还提供公式中文对照、正式模板确认开关及报价审计查询。 */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -201,7 +203,9 @@ import type { Catalog, QuoteSettings } from '/@/types/quotation';
 import '/@/views/quotation/quotation.scss';
 import EquipmentCatalogPanel from './EquipmentCatalogPanel.vue';
 import InstallationCatalogPanel from './InstallationCatalogPanel.vue';
+/** 当前指标类型与风管表格标签页独立保存，设备和安装委托专用面板处理。 */
 const catalogMode = ref('duct');
+/** 风管版本、编辑副本、设置与正文基线用于指标维护；保存或动作完成后重新读取，确保使用最新修订号。 */
 const catalogs = ref<Catalog[]>([]),
 	editing = ref<Catalog>(),
 	settings = ref<QuoteSettings>(),
@@ -209,10 +213,12 @@ const catalogs = ref<Catalog[]>([]),
 	busy = ref(false),
 	tab = ref('materials');
 const audit = ref<Awaited<ReturnType<typeof quoteApi.audit>>>([]);
+/** 负责人的管理权限与草稿状态共同决定编辑能力，dirty 仅比较当前指标正文以提示未保存修改。 */
 const canManage = computed(() => auth('quote_manage')),
 	editable = computed(() => canManage.value && editing.value?.status === 'draft');
 const dirty = computed(() => !!editing.value && JSON.stringify(editing.value.body) !== baseline.value);
 const labels: Record<string, string> = { draft: '草稿', published: '已发布', retired: '已停用' };
+/** 把风管加工费、密度、法兰、配件、税费与净面积系数字段映射为中文说明，保留后台指标键名。 */
 const rateLabels: Record<string, string> = {
 	density_galvanized: '镀锌板密度',
 	density_stainless: '不锈钢密度',
@@ -249,11 +255,13 @@ const expressionLabels: Record<string, string> = {
 	flange_per_meter: '角钢法兰 · 每米价格',
 	flange_per_area: '角钢法兰 · 面积折算价格',
 };
+/** 公式帮助信息包含中文名称、单位和取值来源；只服务于核对说明，不参与表达式计算。 */
 interface FormulaParameter {
 	label: string;
 	unit: string;
 	description: string;
 }
+/** 已知风管公式变量的业务含义；尤其明确公式阶段 area_factor 固定为 1，实际净面积系数在后续汇总应用。 */
 const formulaParameters: Record<string, FormulaParameter> = {
 	thickness: { label: '板材厚度', unit: 'mm', description: '取报价行已核对的板材厚度，并据此匹配「板材基价」中的对应规格。' },
 	density: { label: '板材密度', unit: '吨/m³', description: '按材质取「加工费与系数」中的镀锌板或不锈钢密度；数值与 g/cm³ 相同，例如 7.85。' },
@@ -301,8 +309,10 @@ const formulaFunctions: Record<string, string> = {
 	floor: '向下取整',
 	round: '四舍五入',
 };
-// Match numbers first so scientific notation such as 1e-3 is not mistaken for a variable.
+// 优先识别数值，避免把 1e-3 这类科学计数法误拆为变量。
+/** 优先匹配数值与科学计数法，再匹配变量，避免把 1e-3 中的 e 误当公式参数。 */
 const formulaTokenPattern = /(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[a-zA-Z_][a-zA-Z0-9_]*/g;
+/** 按公式阶段解释吨价来源；已知变量使用业务定义，直接引用的费率显示当前指标值，无法识别的参数明确提示校验。 */
 function describeParameter(key: string, expressionKey: string): FormulaParameter {
 	if (key === 'ton_price') {
 		const flange = expressionKey.startsWith('flange_');
@@ -319,6 +329,7 @@ function describeParameter(key: string, expressionKey: string): FormulaParameter
 	}
 	return { label: `未识别参数：${key}`, unit: '待核对', description: '请核对参数名称；保存并校验指标时会检查公式是否合法。' };
 }
+/** 随草稿公式实时生成中文对照、结果单位和去重后的变量说明，便于负责人核对英文公式。 */
 const formulaGuides = computed(() =>
 	Object.entries(editing.value?.body.expressions || {}).map(([key, expression]) => {
 		const variables = [
@@ -336,6 +347,7 @@ const formulaGuides = computed(() =>
 		};
 	})
 );
+/** 读取风管指标及模板设置，深拷贝选中版本并建立保存基线，避免修改已发布数据。 */
 async function reload(id?: string) {
 	catalogs.value = (await quoteApi.resources()).filter((c) => c.kind === 'duct_catalog');
 	settings.value = await quoteApi.settings();
@@ -343,6 +355,7 @@ async function reload(id?: string) {
 	editing.value = item ? JSON.parse(JSON.stringify(item)) : undefined;
 	baseline.value = editing.value ? JSON.stringify(editing.value.body) : '';
 }
+/** 离开页面或切换版本前确认是否放弃未保存的风管指标修改。 */
 async function leave() {
 	if (!dirty.value) return true;
 	try {
@@ -352,11 +365,13 @@ async function leave() {
 		return false;
 	}
 }
+/** 选中其他指标前处理未保存输入，再复制目标正文；重复选中当前版本不重复重置表单。 */
 async function select(item: Catalog) {
 	if (editing.value?.id === item.id || !(await leave())) return;
 	editing.value = JSON.parse(JSON.stringify(item));
 	baseline.value = JSON.stringify(item.body);
 }
+/** 调用后端初始化基价草稿并进入新版本，负责人仍需核对、保存、校验和发布。 */
 async function seed() {
 	busy.value = true;
 	try {
@@ -369,6 +384,7 @@ async function seed() {
 		busy.value = false;
 	}
 }
+/** 以当前资源 ID 和修订号保存风管草稿，成功后刷新正文与基线。 */
 async function save() {
 	if (!editing.value) return;
 	busy.value = true;
@@ -383,6 +399,7 @@ async function save() {
 		busy.value = false;
 	}
 }
+/** 执行发布、停用、删除、重新启用及修订等指标动作；停用最新版本不能自动退回旧价格，实际状态判断由后端负责。 */
 async function act(action: string) {
 	if (!editing.value) return;
 	try {
@@ -403,6 +420,7 @@ async function act(action: string) {
 		busy.value = false;
 	}
 }
+/** 负责人确认正式模板后允许或暂停新的正式导出；提交设置修订号以防并发覆盖，历史导出文件仍保留。 */
 async function changeTemplate(value: string | number | boolean) {
 	if (!settings.value) return;
 	try {
@@ -413,6 +431,7 @@ async function changeTemplate(value: string | number | boolean) {
 		report(e);
 	}
 }
+/** 仅在展开审计区域时加载操作记录，减少日常指标查看中的无关请求。 */
 async function loadAudit(event: Event) {
 	if (!(event.target as HTMLDetailsElement).open) return;
 	try {
@@ -421,6 +440,7 @@ async function loadAudit(event: Event) {
 		report(e);
 	}
 }
+/** 关闭或刷新页面时，提醒当前风管指标存在未保存修改。 */
 function beforeUnload(e: BeforeUnloadEvent) {
 	if (dirty.value) {
 		e.preventDefault();

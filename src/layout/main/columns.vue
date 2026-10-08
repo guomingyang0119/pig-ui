@@ -5,7 +5,7 @@
 			<LayoutAside />
 			<el-scrollbar ref="layoutScrollbarRef" class="layout-backtop">
 				<LayoutHeader />
-				<LayoutMain ref="layoutMainRef" />
+				<LayoutMain ref="layoutMainRef" @view-ready="initScrollBarHeight" />
 			</el-scrollbar>
 		</el-container>
 	</el-container>
@@ -22,7 +22,6 @@ const ColumnsAside = defineAsyncComponent(() => import('/@/layout/component/colu
 
 const layoutScrollbarRef = ref<RefType>('');
 const layoutMainRef = ref<InstanceType<typeof LayoutMain>>();
-const route = useRoute();
 const { themeConfig } = storeToRefs(useThemeConfig());
 
 const updateScrollbar = () => {
@@ -43,10 +42,6 @@ const initScrollBarHeight = async () => {
 };
 
 onMounted(() => {
-	initScrollBarHeight();
-});
-
-watch(() => route.path, () => {
 	initScrollBarHeight();
 });
 

@@ -1,16 +1,30 @@
 <template>
 	<div class="layout-parent">
 		<router-view v-slot="{ Component }">
-			<transition :name="setTransitionName" mode="out-in">
+			<transition :name="setTransitionName" mode="out-in" @after-enter="notifyViewReady">
 				<keep-alive>
-					<component :is="Component" :key="getRouterViewKey" class="w100" v-show="!isIframePage" v-if="route.meta.isKeepAlive" />
+					<component
+						:is="Component"
+						:key="getRouterViewKey"
+						class="w100"
+						v-show="!isIframePage"
+						v-if="route.meta.isKeepAlive"
+						@vue:mounted="notifyViewReady"
+					/>
 				</keep-alive>
 			</transition>
-			<transition :name="setTransitionName" mode="out-in">
-				<component :is="Component" :key="getRouterViewKey" class="w100" v-show="!isIframePage" v-if="!route.meta.isKeepAlive" />
+			<transition :name="setTransitionName" mode="out-in" @after-enter="notifyViewReady">
+				<component
+					:is="Component"
+					:key="getRouterViewKey"
+					class="w100"
+					v-show="!isIframePage"
+					v-if="!route.meta.isKeepAlive"
+					@vue:mounted="notifyViewReady"
+				/>
 			</transition>
 		</router-view>
-		<transition :name="setTransitionName" mode="out-in">
+		<transition :name="setTransitionName" mode="out-in" @after-enter="notifyViewReady">
 			<Iframes class="w100" v-show="isIframePage" :refreshKey="state.iframeRefreshKey" :name="setTransitionName" :list="state.iframeList" />
 		</transition>
 	</div>
@@ -23,6 +37,9 @@ import { Session } from '/@/utils/storage';
 import mittBus from '/@/utils/mitt';
 
 const Iframes = defineAsyncComponent(() => import('/@/layout/routerView/iframes.vue'));
+const emit = defineEmits(['view-ready']);
+// 路由变化时旧页面仍可能处于退场动画，等新页面挂载或入场完成再更新布局。
+const notifyViewReady = () => emit('view-ready');
 
 const route = useRoute();
 const router = useRouter();

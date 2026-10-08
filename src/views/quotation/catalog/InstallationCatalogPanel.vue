@@ -1,4 +1,5 @@
 <template>
+	<!-- 安装指标维护面板：从已核对基准数据准备草稿，负责人保存、校验和发布版本；已发布指标只读，调价通过新版本执行。 -->
 	<div v-loading="busy">
 		<div class="q-section-head" style="margin: 14px 0">
 			<div>
@@ -96,6 +97,7 @@
 	</div>
 </template>
 <script setup lang="ts">
+/** 安装指标维护面板：从已核对基准数据准备草稿，负责人保存、校验和发布版本；已发布指标只读，调价通过新版本执行。 */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -104,24 +106,29 @@ import { quoteApi } from '/@/api/quotation';
 import { confirm, report, stateLabels } from '/@/views/quotation/shared';
 import type { Catalog, InstallationCatalogBody } from '/@/types/quotation';
 type InstallationCatalog = Catalog<InstallationCatalogBody>;
+/** 安装指标版本列表与 editing 编辑副本分开保存；baseline 用于发现未保存修改，避免直接污染列表或历史版本。 */
 const catalogs = ref<InstallationCatalog[]>([]),
 	editing = ref<InstallationCatalog>(),
 	busy = ref(false),
 	baseline = ref(''),
 	region = ref('');
+/** 只有具备 quote_manage 权限且当前为草稿时允许编辑；接口仍负责最终权限、版本及状态校验。 */
 const canManage = computed(() => auth('quote_manage'));
 const editable = computed(() => canManage.value && editing.value?.status === 'draft');
 const snapshot = () => JSON.stringify(editing.value?.body);
 const dirty = computed(() => !!editing.value && snapshot() !== baseline.value);
 const projects = computed(() => (editing.value?.body.projects || []).filter((p) => !region.value || p.regions.includes(region.value)));
+/** 深拷贝选中指标并建立基线，保证表单修改只作用于当前编辑副本。 */
 function setEditing(item?: InstallationCatalog) {
 	editing.value = item ? JSON.parse(JSON.stringify(item)) : undefined;
 	baseline.value = snapshot();
 }
+/** 查询资源后仅保留安装指标，优先重新选中指定版本，再更新编辑副本与保存基线。 */
 async function reload(id?: string) {
 	catalogs.value = (await quoteApi.resources<InstallationCatalogBody>()).filter((c) => c.kind === 'installation_catalog');
 	setEditing(catalogs.value.find((c) => c.id === id) || catalogs.value[0]);
 }
+/** 存在未保存的安装指标修改时确认是否放弃；取消返回 false，保持当前表单。 */
 async function leave() {
 	if (!dirty.value) return true;
 	try {
@@ -131,9 +138,11 @@ async function leave() {
 		return false;
 	}
 }
+/** 切换指标版本前处理未保存修改，确认后才替换当前编辑副本。 */
 async function select(item: InstallationCatalog) {
 	if (await leave()) setEditing(item);
 }
+/** 复用已有安装草稿，或读取已核对源表数据建立未持久化编辑副本；此动作不会直接发布价格。 */
 async function seed() {
 	if (!(await leave())) return;
 	busy.value = true;
@@ -158,6 +167,7 @@ async function seed() {
 		busy.value = false;
 	}
 }
+/** 已有安装指标按 revision 保存，新建源表副本先创建资源；成功后重新读取版本，更新并发修订号和基线。 */
 async function save() {
 	if (!editing.value) return;
 	busy.value = true;
@@ -173,6 +183,7 @@ async function save() {
 		busy.value = false;
 	}
 }
+/** 携带当前修订号执行安装指标校验、发布、修订、停用等生命周期动作，完成后刷新相应版本。 */
 async function act(action: string) {
 	if (!editing.value) return;
 	try {
@@ -195,6 +206,7 @@ async function act(action: string) {
 		busy.value = false;
 	}
 }
+/** 页面关闭或刷新时，对尚未保存的指标修改触发浏览器离开提示。 */
 function beforeUnload(event: BeforeUnloadEvent) {
 	if (dirty.value) {
 		event.preventDefault();

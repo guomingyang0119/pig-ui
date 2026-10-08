@@ -1,4 +1,5 @@
 <template>
+	<!-- 整单安装报价面板：维护安装省区、辅材和现场附加条件，管理独立安装项目，并展示后端逐项安装结果与待确认原因。 -->
 	<section class="q-section" v-if="body.installation_options">
 		<div class="q-section-head">
 			<h2>安装报价</h2>
@@ -100,12 +101,14 @@
 	</section>
 </template>
 <script setup lang="ts">
+/** 整单安装报价面板：维护安装省区、辅材和现场附加条件，管理独立安装项目，并展示后端逐项安装结果与待确认原因。 */
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { QuoteBody, InstallationCatalogBody, InstallationEntry, InstallationFee, InstallationLine } from '/@/types/quotation';
 import { blankInstallation } from '/@/views/quotation/installation';
 import { money } from '/@/views/quotation/shared';
 import InstallationEntryFields from './InstallationEntryFields.vue';
+/** 直接编辑报价正文中的安装条件；fee 是上次后端计算结果，catalog 提供生效项目参考，包含安装的切换通过事件同步整单付款口径。 */
 const props = defineProps<{
 	body: QuoteBody;
 	locked: boolean;
@@ -114,6 +117,7 @@ const props = defineProps<{
 	productPendingCount?: number;
 }>();
 const emit = defineEmits<{ (e: 'included-change'): void }>();
+/** 根据整单安装选项决定现场附加费是否计取；交叉施工采用明确的计取/不计取决定。独立项目结果索引接在产品行之后。 */
 const options = computed(() => props.body.installation_options!);
 const hasDuctRows = computed(
 	() => props.body.rows.some((row) => row.category === '风管') || (props.body.installation_items || []).some((item) => item.category === '风管')
@@ -131,9 +135,11 @@ const siteConditionHint = computed(
 			: '施工标高仅记录现场工况；需要计取高空措施费等现场费用时，请勾选现场附加费并填写金额。'
 );
 const projectLabel = (id: string) => props.catalog?.projects.find((p) => p.id === id)?.name || (id ? '项目需重新核对' : '系统自动匹配');
+/** 弹窗使用独立 draft 副本；target 记录待回写的原项目，取消弹窗不会把未确认输入写回报价正文。 */
 const dialog = ref(false),
 	draft = ref<InstallationEntry>();
 let target: InstallationEntry | undefined;
+/** 分别汇总产品和安装的待确认数量，提示尚不能形成最终报价，不能把缺失安装价格当作 0。 */
 const pendingInstallationCount = computed(() => props.fee?.lines?.filter((line) => line.status === 'pending').length || 0);
 const pendingProductCount = computed(() => props.productPendingCount || 0);
 const pendingTotalCount = computed(() => pendingProductCount.value + pendingInstallationCount.value);
@@ -142,6 +148,7 @@ const pendingSummary = computed(() => {
 	const installation = pendingInstallationCount.value;
 	return `产品和安装共 ${pendingTotalCount.value} 项待确认（产品 ${product} 项、安装费用 ${installation} 项），暂不能形成最终报价`;
 });
+/** 切换交叉施工时初始化现场费决定；取消交叉施工会清除专属决定和不计取原因。 */
 function onCrossWorkChange(value: boolean | string | number) {
 	if (value) options.value.cross_work_fee_decision = options.value.include_site_fee ? 'charge' : '';
 	else {
@@ -149,27 +156,33 @@ function onCrossWorkChange(value: boolean | string | number) {
 		options.value.site_waive_reason = '';
 	}
 }
+/** 把明确的交叉施工计取决定同步为现场费开关；选择计取时清除旧的不计取原因。 */
 function onCrossWorkFeeDecisionChange(value: string | number | boolean | undefined) {
 	options.value.include_site_fee = value === 'charge';
 	if (value === 'charge') options.value.site_waive_reason = '';
 }
+/** 按独立项目在整单安装结果中的索引取计算行，保持页面项目与后端明细顺序对应。 */
 function line(row: { lineIndex: number }): InstallationLine | undefined {
 	return props.fee?.lines?.[row.lineIndex];
 }
+/** 待确认安装行高亮，明确排除安装的行弱化显示，便于逐项核对。 */
 function installationRowClass({ row }: { row: { lineIndex: number } }) {
 	const status = line(row)?.status;
 	return status === 'pending' ? 'installation-row-pending' : status === 'excluded' ? 'excluded-row' : '';
 }
+/** 复制现有独立安装项目到弹窗草稿，确认时才回写当前项目。 */
 function edit(entry: InstallationEntry) {
 	target = entry;
 	draft.value = { ...entry };
 	dialog.value = true;
 }
+/** 创建空白独立安装项目；它只增加安装条目，不增加材料供货行。 */
 function add() {
 	target = undefined;
 	draft.value = blankInstallation();
 	dialog.value = true;
 }
+/** 确认安装条件前检查不含安装原因，再更新原项目或追加新项目。这里只应用到页面草稿，仍需整单保存并试算。 */
 function apply() {
 	if (!draft.value) return;
 	if (draft.value.excluded && !draft.value.exclude_reason.trim()) {

@@ -1,4 +1,5 @@
 <template>
+	<!-- 设备成本与选型参数维护：编辑阀门、风口、风机本体、工况和防爆分档。表格应用到当前指标草稿后，还需父页面保存、校验与发布。 -->
 	<div class="equipment-parameters">
 		<p class="parameter-intro">这里维护报价使用的基础参数。日常报价请在工作台填写客户需求；本页修改先保存为草稿，校验并发布后才用于新试算。</p>
 		<el-tabs v-model="section">
@@ -180,13 +181,16 @@
 </template>
 
 <script setup lang="ts">
+/** 设备成本与选型参数维护：编辑阀门、风口、风机本体、工况和防爆分档。表格应用到当前指标草稿后，还需父页面保存、校验与发布。 */
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import type { EquipmentCatalogBody, FanPoint, FanBody } from '/@/types/quotation';
 import { equipmentKinds, louverLabels, equipmentFormulaInChinese as chineseFormula } from '/@/views/quotation/equipment';
 import { confirm, report } from '/@/views/quotation/shared';
 
+/** 父页面提供指标草稿和只读标记；pending-change 通知父页面弹窗存在未应用输入，参与离开页面的提示。 */
 const props = defineProps<{ catalog: EquipmentCatalogBody; editable: boolean }>();
 const emit = defineEmits<{ (e: 'pending-change', value: boolean): void }>();
+/** 分别保存参数分组、风机本体检索、工况检索、系列/隔离筛选和分页状态，筛选不修改原始指标数据。 */
 const section = ref('valves'),
 	bodySearch = ref(''),
 	pointSearch = ref(''),
@@ -200,6 +204,7 @@ const families = [
 	{ value: 'SWF', label: 'SWF · 混流风机' },
 ];
 const familyLabel = (value: string) => families.find((f) => f.value === value)?.label || value;
+/** 各中文字段的位置与后台阀门成本、风口数组参数和风机公式字段对应，编辑时保持原有数据结构。 */
 const valveFields = [
 	{ key: 'mechanism', label: '基础机构成本（元）' },
 	{ key: 'blade_thickness', label: '叶片厚度（mm）' },
@@ -210,6 +215,7 @@ const formulaFields = [
 	{ key: 'material_expression' as const, label: '金属材料成本公式（元）' },
 	{ key: 'other_expression' as const, label: '其他成本公式（元）' },
 ];
+/** 将阀门和风口字典转成中文表格行，风机本体与工况则在原列表基础上做搜索和分页。 */
 const valves = computed(() => Object.entries(props.catalog.valves).map(([key, value]) => ({ key, value, label: equipmentKinds[key] || key })));
 const louvers = computed(() => Object.entries(props.catalog.louvers).map(([key, value]) => ({ key, value, label: louverLabels[key] || key })));
 const matches = (values: unknown[], search: string) => values.join(' ').toLowerCase().includes(search.trim().toLowerCase());
@@ -222,6 +228,7 @@ const points = computed(() =>
 			matches([p.model, p.family, p.size, p.source], pointSearch.value)
 	)
 );
+/** 工况分页仅影响显示；筛选改变时重置页码，结果减少时将页码限制在有效范围。 */
 const pointPage = computed(() => points.value.slice((page.value - 1) * pageSize, page.value * pageSize));
 watch([pointSearch, familyFilter, onlyQuarantined], () => (page.value = 1));
 watch(
@@ -229,6 +236,7 @@ watch(
 	() => (page.value = Math.max(1, Math.min(page.value, Math.ceil(points.value.length / pageSize))))
 );
 
+/** 编辑器保存本体或工况的独立副本及基线，双速功率/极数用斜杠文本编辑，应用后才写入指标草稿。 */
 const editorVisible = ref(false),
 	editorBaseline = ref(''),
 	isNew = ref(false);
@@ -241,6 +249,7 @@ const editorSnapshot = () => JSON.stringify({ point: pointEditor.value, body: bo
 const editorDirty = computed(() => editorVisible.value && editorSnapshot() !== editorBaseline.value);
 watch(editorDirty, (value) => emit('pending-change', value));
 onBeforeUnmount(() => emit('pending-change', false));
+/** 复制选中的风机工况供编辑或查看；新增记录生成手工来源 ID，并把多档功率与极数转成可核对文本。 */
 function editPoint(point?: FanPoint) {
 	if (!point && !props.editable) return;
 	isNew.value = !point;
@@ -266,6 +275,7 @@ function editPoint(point?: FanPoint) {
 	editorBaseline.value = editorSnapshot();
 	editorVisible.value = true;
 }
+/** 复制风机本体成本参数，新增时保留空公式和空厚度，等待负责人填写而不猜测成本。 */
 function editBody(body?: FanBody) {
 	if (!body && !props.editable) return;
 	isNew.value = !body;
@@ -285,6 +295,7 @@ function editBody(body?: FanBody) {
 	editorBaseline.value = editorSnapshot();
 	editorVisible.value = true;
 }
+/** 关闭参数弹窗前核对是否有未应用输入；只有确认放弃后才执行关闭回调。 */
 async function closeEditor(done: () => void) {
 	try {
 		if (editorDirty.value) await confirm('本次参数修改尚未应用到草稿，确认放弃？');
@@ -293,11 +304,12 @@ async function closeEditor(done: () => void) {
 		report(e);
 	}
 }
+/** 把弹窗确认的本体或工况替换/追加到当前草稿。未修改的功率、极数数组保持原顺序和类型，避免无关数据变化。 */
 function applyEditor() {
 	if (!props.editable) return;
 	if (pointEditor.value) {
 		const point = pointEditor.value;
-		// Preserve untouched arrays (including their order and value types).
+		// 未修改的数组保持原样，包括原有顺序和每项值的类型。
 		if (powerText.value !== point.powers.join(' / ')) point.powers = powerText.value.split('/').map((v) => v.trim());
 		if (poleText.value !== point.poles.join(' / ')) point.poles = poleText.value.split('/').map((v) => v.trim());
 		if (isNew.value) props.catalog.fan_points.push(point);
@@ -319,6 +331,7 @@ function applyEditor() {
 	}
 	editorVisible.value = false;
 }
+/** 仅从可编辑草稿移除指定本体或工况记录，操作前确认；已发布版本通过只读权限保留。 */
 async function removeEntry(kind: 'fan_points' | 'fan_bodies', id: string) {
 	if (!props.editable) return;
 	try {
@@ -329,11 +342,13 @@ async function removeEntry(kind: 'fan_points' | 'fan_bodies', id: string) {
 		report(e);
 	}
 }
+/** 按前后成本上限显示防爆倍率适用区间，null 上限表示最后一档无上限，当前上限包含本数。 */
 function tierRange(index: number, limit: string | null) {
 	const previous = props.catalog.explosion_tiers[index - 1]?.limit || '待填写';
 	if (limit === null) return index === 0 ? '全部成本' : `高于 ${previous} 元`;
 	return (index === 0 ? '' : `高于 ${previous} 元，`) + `不超过 ${limit || '待填写'} 元`;
 }
+/** 确认后删除当前草稿中的防爆成本档位，调整结果还需指标校验与发布才生效。 */
 async function removeTier(index: number) {
 	if (!props.editable) return;
 	try {
@@ -346,6 +361,7 @@ async function removeTier(index: number) {
 </script>
 
 <style scoped>
+/* 设备参数标签页、分页工况表和中文编辑弹窗的布局，兼顾大量选型记录与成本公式的对照查看。 */
 .parameter-intro,
 .parameter-help {
 	color: var(--el-text-color-secondary);

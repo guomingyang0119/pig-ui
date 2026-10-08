@@ -1,3 +1,4 @@
+/* 报价工作台、报价记录与指标管理的公共页面样式；统一抬头、条件区、金额、状态和响应式布局。 */
 .quotation-page {
 	--quote-accent: #2563eb;
 	padding: 24px 28px;
@@ -318,6 +319,7 @@
 		}
 	}
 }
+/* 行参数抽屉补足报价页面的间距，让需求参数、来源和计算明细沿同一阅读顺序显示。 */
 .quotation-drawer .el-drawer__body {
 	padding: 0 22px 24px;
 }
@@ -325,6 +327,7 @@
 	min-height: 0;
 	padding: 0;
 }
+/* 人工价格回导弹窗的汇总、分组和前后值样式，帮助确认修改金额与仍待补全的产品。 */
 .review-import-dialog {
 	.el-dialog__body {
 		padding-top: 10px;
@@ -409,6 +412,7 @@
 		color: var(--el-text-color-secondary);
 	}
 }
+/* 窄屏下调整页面与表单布局，保留报价条件和操作的可读性。 */
 @media (max-width: 760px) {
 	.review-import-dialog {
 		.review-import-summary {

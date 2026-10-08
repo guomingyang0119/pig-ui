@@ -5,7 +5,7 @@
 			<LayoutAside />
 			<div class="flex-center layout-backtop">
 				<LayoutTagsView v-if="isTagsview" />
-				<LayoutMain ref="layoutMainRef" />
+				<LayoutMain ref="layoutMainRef" @view-ready="initScrollBarHeight" />
 			</div>
 		</el-container>
 	</el-container>
@@ -44,10 +44,6 @@ const initScrollBarHeight = async () => {
 };
 
 onMounted(() => {
-	initScrollBarHeight();
-});
-
-watch(() => route.path, () => {
 	initScrollBarHeight();
 });
 

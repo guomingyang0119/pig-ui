@@ -1,7 +1,10 @@
+/** Excel 导入页的分组与预览辅助逻辑。产品范围仅用于展示映射字段，实际识别与价格计算仍由后端完成。 */
 import type { ImportSheet } from '/@/types/quotation';
 
+/** 列映射以字段名关联原表的零基列索引；null 表示未选列，允许导入后补充缺少的参数。 */
 export type ColumnMapping = Record<string, number | null>;
 type Field = [string, string];
+/** 映射表单的一组字段及提示信息；hiddenCount 用于显示尚未展开的补充独立列数量。 */
 export interface MappingGroup {
 	key: string;
 	label: string;
@@ -9,6 +12,7 @@ export interface MappingGroup {
 	fields: Field[];
 	hiddenCount: number;
 }
+/** 从确认的起始行统计风管、设备、未知产品及上下文行，并取前五条产品形成预览。已识别的楼层、区域等说明行不参与产品计数。 */
 export function analyseSheet(sheet: ImportSheet, start: number | undefined, mapping: ColumnMapping) {
 	const context = new Set((sheet.auto_context_rows || []).map((r) => r.number));
 	const counts = { duct: 0, equipment: 0, unknown: 0, context: 0 };
@@ -22,7 +26,8 @@ export function analyseSheet(sheet: ImportSheet, start: number | undefined, mapp
 		const cell = (key: string) => (mapping[key] == null ? '' : row.cells[mapping[key]!] || '');
 		const name = cell('name');
 		const unit = cell('unit');
-		// This broad grouping only controls the import UI, never the pricing category.
+		/** 这里的宽泛识别仅决定导入页参数分组，不能把“风管止回阀”等设备强制归入风管计价。 */
+		// 此处的宽泛分组只控制导入界面，不决定产品的实际计价类别。
 		const equipment = /风机|风阀|阀门|止回阀|蝶阀|调节阀|防火阀|排烟阀|风口|百叶|散流器|排气扇|换气扇|通风器|消声|消音|静压箱|空调/.test(name);
 		const duct = !equipment && /风管/.test(name);
 		const kind = duct ? 'duct' : equipment || /^(台|个|只|套|件|组|樘)$/.test(unit.trim()) ? 'equipment' : 'unknown';
@@ -40,6 +45,7 @@ export function analyseSheet(sheet: ImportSheet, start: number | undefined, mapp
 	return { ...counts, total: counts.duct + counts.equipment + counts.unknown, preview };
 }
 
+/** 尺寸与材质可能由风管、设备共用；专属字段分别放入对应参数组，减少重复映射。 */
 const dimensions: Field[] = [
 	['material', '材质'],
 	['thickness', '厚度（mm）'],
@@ -80,6 +86,7 @@ const equipmentFields: Field[] = [
 	['length', '长度（mm）'],
 ];
 
+/** 根据当前工作表的产品范围生成通用、风管和设备映射组。共用数量列与尺寸列只显示一次，已匹配的独立参数自动展开，其他参数按需补充。 */
 export function mappingGroups(
 	profile: ReturnType<typeof analyseSheet>,
 	mapping: ColumnMapping,
@@ -89,6 +96,7 @@ export function mappingGroups(
 	const duct = profile.duct > 0 || showAllTypes;
 	const equipment = profile.equipment > 0 || showAllTypes;
 	const sharedDimensions = (duct && equipment) || (!duct && !equipment);
+	/** 优先使用已映射的工程量列作为共用数量；只有原表确实有独立数量列时才提供第二个数量字段。 */
 	const quantityKey = mapping.engineering_quantity != null ? 'engineering_quantity' : 'quantity';
 	const secondQuantity = quantityKey === 'quantity' ? 'engineering_quantity' : 'quantity';
 	const base: Field[] = [
@@ -140,6 +148,7 @@ export function mappingGroups(
 	return result;
 }
 
+/** 在规格、数量缺少可用来源列时提示人工核对；提示允许原表缺项在报价草稿补充，不直接判定产品为零价。 */
 export function mappingWarnings(mapping: ColumnMapping) {
 	const warnings: string[] = [];
 	if (mapping.spec == null && !['model', 'width', 'diameter', 'thickness', 'power', 'airflow'].some((key) => mapping[key] != null))
