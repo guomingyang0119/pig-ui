@@ -8,6 +8,9 @@
 					<div :class="cellClass(row, 'name')">
 						<div class="review-product">
 							<strong>{{ display(row.name) }}</strong>
+							<el-tag v-if="row.scope === 'excluded'" type="info" effect="plain" size="small">不报价</el-tag>
+							<el-tag v-else-if="row.scope === 'installation_only'" type="info" effect="plain" size="small">仅安装</el-tag>
+							<el-tag v-if="row.scope_restore_required" type="warning" effect="plain" size="small">填价待确认恢复范围</el-tag>
 							<el-tag v-if="row.changed" type="success" effect="light" size="small">已修改</el-tag>
 							<el-tag v-if="row.pending" type="warning" effect="light" size="small">待补全</el-tag>
 						</div>
@@ -25,7 +28,7 @@
 			>
 				<template #default="{ row }">
 					<div :class="cellClass(row, column.key)">
-						<span>{{ display(row[column.key]) }}</span>
+						<span>{{ reviewScopeAmountLabel(row, column.key) || display(row[column.key]) }}</span>
 						<small v-if="manualChange(row, column.key)">原：{{ display(row.before_values[column.key]) }}</small>
 						<small v-else-if="derivedChange(row, column.key)" class="review-derived">系统补算</small>
 					</div>
@@ -39,6 +42,7 @@
 /** 人工校对版回导的只读变化表：对照原值和新值，区分人工修改与系统重算的金额，并标明仍待补全的产品。 */
 import { computed } from 'vue';
 import type { ReviewImportRow } from '/@/types/quotation';
+import { reviewScopeAmountLabel } from './quoteScope';
 
 const props = defineProps<{ rows: ReviewImportRow[]; installation: boolean }>();
 /** 列结构与不含安装/含安装两套校对模板对应，安装费用与本行报价列仅在含安装模板下展示。 */

@@ -12,6 +12,7 @@ import type {
 	QuoteResult,
 	QuoteSettings,
 	QuoteSummary,
+	QuotePage,
 	ReviewImportPreview,
 	AiInputImportPreview,
 	ProductRuleBody,
@@ -21,6 +22,7 @@ import type {
 	EquipmentOptions,
 	DuctOptions,
 	InstallationOptions,
+	AiImportJob,
 } from '/@/types/quotation';
 
 /** 后端统一响应外层，业务数据位于 data；成功与错误处理继续遵循公共 request 拦截器。 */
@@ -28,6 +30,14 @@ interface Result<T> {
 	code: number;
 	data: T;
 	msg: string;
+}
+/** 新后端直接返回规范后的报价正文；可选字段兼容部署期间的旧版接口。 */
+export interface QuoteMutationResult {
+	revision: number;
+	body?: QuoteBody;
+	state?: Quote['state'];
+	result?: QuoteResult | null;
+	result_stale?: boolean;
 }
 const base = '/admin/quotation';
 /** 发送普通 JSON 报价请求并提取业务 data；文件上传和下载需要单独设置 multipart 或 blob，因此在各方法中处理。 */
@@ -39,7 +49,15 @@ export const quoteApi = {
 	/** 查询可见产品规则版本，包含草稿、发布与停用状态，供行匹配和通用管理使用。 */
 	productRules: () => call<Catalog<ProductRuleBody>[]>('/product-rules'),
 	/** 对当前客户行读取模板、候选规则及推荐理由；只提供建议，不自动选择、发布或保存。 */
-	productRuleRecommendations: (row: QuoteRow, body?: ProductRuleBody) => call<ProductRuleRecommendations>('/product-rules/recommendations', 'post', { row, body }),
+	productRuleRecommendations: (row: QuoteRow, body?: ProductRuleBody, quote?: QuoteBody) =>
+		call<ProductRuleRecommendations>('/product-rules/recommendations', 'post', {
+			row,
+			body,
+			installation_options: quote?.installation_options,
+			duct_options: quote?.duct_options,
+			equipment_options: quote?.equipment_options,
+			context_rows: quote?.rows,
+		}),
 	/** 以本行参数和整单条件试算规则，返回未完成原因或逐步成本明细，不写入报价与共用规则。 */
 	trialProductRule: (data: {
 		body: ProductRuleBody;
@@ -47,6 +65,7 @@ export const quoteApi = {
 		equipment_options?: EquipmentOptions;
 		duct_options?: DuctOptions;
 		installation_options?: InstallationOptions;
+		context_rows?: QuoteRow[];
 		include_freight: boolean | null;
 	}) => call<{ result: RowResult }>('/product-rules/trial', 'post', data),
 	/** 建立通用产品规则草稿，后续校验和发布成功才参与其他报价的自动匹配。 */
@@ -81,14 +100,17 @@ export const quoteApi = {
 		call<QuoteSettings>('/settings', 'put', { revision: settings.revision, formal_template_confirmed: confirmed }),
 	/** 查询当前或已归档报价摘要，服务端按登录人员权限限定可见范围。 */
 	list: (archived = false) => call<QuoteSummary[]>('/quotes?archived=' + archived),
+	/** 按页查询当前账号可见报价，客户和项目关键字在服务端筛选。 */
+	listPage: (archived = false, page = 1, size = 20, keyword = '') =>
+		call<QuotePage>(`/quotes/page?archived=${archived}&page=${page}&size=${size}&keyword=${encodeURIComponent(keyword)}`),
 	/** 读取指定报价版本正文、上次试算、结果过期标志及历史导出记录。 */
 	detail: (id: string) => call<Quote>('/quotes/' + id),
 	/** 手工或按导入计划创建新报价草稿，返回编号供工作台打开。 */
 	create: (data: Record<string, unknown> = {}) => call<{ id: string }>('/quotes', 'post', data),
 	/** 保存报价正文与当前修订号，后端生成/保留行标识并使旧结果失效。 */
-	save: (id: string, body: QuoteBody, revision: number) => call<{ revision: number }>('/quotes/' + id, 'put', { ...body, revision }),
+	save: (id: string, body: QuoteBody, revision: number) => call<QuoteMutationResult>('/quotes/' + id, 'put', { ...body, revision }),
 	/** 基于已经保存的版本试算整单，返回计算结果和新修订号，待确认项目由引擎显式保留。 */
-	calculate: (id: string, revision: number) => call<{ result: QuoteResult; revision: number }>('/quotes/' + id + '/calculate', 'post', { revision }),
+	calculate: (id: string, revision: number) => call<QuoteMutationResult>('/quotes/' + id + '/calculate', 'post', { revision }),
 	/** 执行报价修订、归档、恢复或删除等状态动作，修订可能返回新报价编号。 */
 	action: (id: string, revision: number, action: string) => call<{ id?: string }>('/quotes/' + id + '/' + action, 'post', { revision }),
 	/** 重新识别已保存草稿中的产品行，返回风管、设备和待识别数量，不补入未导入的工作表。 */
@@ -111,6 +133,32 @@ export const quoteApi = {
 		}>;
 		return response.data;
 	},
+	/** 每批调用沿用原AI入口和超时路由；请求ID支持上传响应丢失后的幂等重试。 */
+	async startAiImport(files: File[], jobId: string): Promise<AiImportJob> {
+		const data = new FormData();
+		files.forEach((file) => data.append('files', file));
+		const response = (await request({
+			url: base + '/ai-imports',
+			method: 'post',
+			params: { action: 'start', jobId },
+			data,
+			headers: { 'Enc-Flag': 'false' },
+			timeout: 180000,
+		})) as unknown as Result<AiImportJob>;
+		return response.data;
+	},
+	async nextAiImport(jobId: string): Promise<AiImportJob> {
+		const response = (await request({
+			url: base + '/ai-imports',
+			method: 'post',
+			params: { action: 'next', jobId },
+			timeout: 180000,
+		})) as unknown as Result<AiImportJob>;
+		return response.data;
+	},
+	aiImportStatus: (jobId: string) => call<AiImportJob>('/ai-imports?jobId=' + encodeURIComponent(jobId)),
+	aiImportJobs: () => call<AiImportJob[]>('/ai-imports'),
+	cancelAiImport: (jobId: string) => call<AiImportJob>('/ai-imports?action=cancel&jobId=' + encodeURIComponent(jobId), 'post'),
 	/** 下载绑定当前 AI 草稿版本的待核验 Excel；若 blob 实际为 JSON 错误，先解析业务提示，下载完成后回收对象 URL。 */
 	async downloadStandardInput(id: string) {
 		const blob = (await request({ url: `${base}/quotes/${id}/standard-input`, method: 'get', responseType: 'blob' })) as unknown as Blob;
@@ -156,7 +204,8 @@ export const quoteApi = {
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	},
 	/** 按草稿/正式类型生成导出记录，正式导出由后端检查结果、待确认项、指标与模板，并锁定当前版本。 */
-	export: (id: string, revision: number, kind: string) => call<ExportRecord>('/quotes/' + id + '/export', 'post', { revision, kind }),
+	export: (id: string, revision: number, kind: string) =>
+		call<ExportRecord & { quote_state: Quote['state']; quote_revision: number }>('/quotes/' + id + '/export', 'post', { revision, kind }),
 	/** 上传人工价格校对版，返回修改与派生金额预览，暂不改变报价。 */
 	async previewReviewImport(id: string, revision: number, file: File): Promise<ReviewImportPreview> {
 		const data = new FormData();
@@ -171,8 +220,11 @@ export const quoteApi = {
 		return response.data;
 	},
 	/** 按导入预览编号和报价修订号应用人工价格，返回重新汇总结果与新修订号。 */
-	applyReviewImport: (id: string, revision: number, importId: string) =>
-		call<{ result: QuoteResult; revision: number }>(`/quotes/${id}/review-imports/${importId}/apply`, 'post', { revision }),
+	applyReviewImport: (id: string, revision: number, importId: string, restoreScopeRowIds: string[] = []) =>
+		call<{ result: QuoteResult; revision: number }>(`/quotes/${id}/review-imports/${importId}/apply`, 'post', {
+			revision,
+			restore_scope_row_ids: restoreScopeRowIds,
+		}),
 	/** 负责人查询报价与指标操作审计，用于追溯执行人员、目标及时间。 */
 	audit: () => call<{ id: string; actor_name: string; action: string; target: string; created_at: string }[]>('/audit'),
 	/** 上传常规 Excel 清单并读取所有工作表及建议映射；创建报价前仍须用户确认逐表导入计划。 */

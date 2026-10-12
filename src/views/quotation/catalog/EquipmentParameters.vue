@@ -186,6 +186,7 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import type { EquipmentCatalogBody, FanPoint, FanBody } from '/@/types/quotation';
 import { equipmentKinds, louverLabels, equipmentFormulaInChinese as chineseFormula } from '/@/views/quotation/equipment';
 import { confirm, report } from '/@/views/quotation/shared';
+import { generateUUID } from '/@/utils/other';
 
 /** 父页面提供指标草稿和只读标记；pending-change 通知父页面弹窗存在未应用输入，参与离开页面的提示。 */
 const props = defineProps<{ catalog: EquipmentCatalogBody; editable: boolean }>();
@@ -257,7 +258,7 @@ function editPoint(point?: FanPoint) {
 	pointEditor.value = point
 		? JSON.parse(JSON.stringify(point))
 		: {
-				id: 'manual:' + crypto.randomUUID(),
+				id: 'manual:' + generateUUID(),
 				model: '',
 				family: '',
 				size: '',
@@ -283,7 +284,7 @@ function editBody(body?: FanBody) {
 	bodyEditor.value = body
 		? JSON.parse(JSON.stringify(body))
 		: {
-				id: 'manual:' + crypto.randomUUID(),
+				id: 'manual:' + generateUUID(),
 				family: '',
 				size: '',
 				steel_price: '',

@@ -8,7 +8,9 @@
 					<p class="q-subtitle">导入客户清单，逐行识别材料与设备，匹配规则计算并汇总报价。</p>
 				</div>
 				<div class="q-toolbar" v-if="canEdit">
-					<el-button @click="productRuleDialog?.open()">产品规则管理</el-button>
+					<el-badge is-dot :hidden="!hasDraftProductRules">
+						<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleDialog?.open()">产品规则管理</el-button>
+					</el-badge>
 					<el-button @click="createBlank()">新建报价</el-button>
 					<el-button @click="aiImportDialog?.open()">AI整理资料并建草稿</el-button>
 					<el-button type="primary" @click="importDialog?.open()">导入客户清单</el-button>
@@ -200,6 +202,7 @@
 				</el-collapse-item>
 			</el-collapse>
 			<InstallationPanel
+				id="quote-installation-conditions"
 				:body="quote.body"
 				:locked="locked"
 				:catalog="activeInstallation"
@@ -223,16 +226,62 @@
 						</p>
 					</div>
 					<div v-if="!locked" class="q-toolbar">
-						<el-button @click="productRuleDialog?.open()">产品规则管理</el-button>
+						<el-badge is-dot :hidden="!hasDraftProductRules">
+							<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleDialog?.open()">产品规则管理</el-button>
+						</el-badge>
 						<el-button @click="autoClassify">重新识别清单</el-button>
+						<el-button :disabled="!batchRows.length" @click="batchParameterDialog?.open()">批量补充（{{ batchRows.length }} 项）</el-button>
+						<el-button :disabled="!batchRows.length" @click="scopeDialog?.open(batchRows)">批量设置范围</el-button>
 						<el-button @click="addRow">＋ 添加项目</el-button>
 					</div>
 				</div>
-				<el-table :data="quote.body.rows" class="q-table" max-height="450" :row-class-name="rowClass" @row-dblclick="openRow">
-					<el-table-column type="index" label="#" width="48" />
+				<div class="q-toolbar" style="margin: 12px 0">
+					<span>总数 {{ scopeCounts.total }}</span><span>参与 {{ scopeCounts.participating }}（含仅安装）</span>
+					<span>已完成 {{ scopeCounts.completed }}</span><span>未完成 {{ scopeCounts.pending }}</span><span>不报价 {{ scopeCounts.excluded }}</span>
+					<span v-if="dirty || hasModifiedRows" class="q-muted">有修改，完成状态待重新试算</span>
+				</div>
+				<div class="q-toolbar" style="margin-bottom: 12px">
+					<el-input v-model="productSearch" clearable placeholder="搜索产品、规格、来源或原因" style="width: 260px" />
+					<el-select v-model="productCategory" clearable placeholder="全部类别" style="width: 150px">
+						<el-option v-for="category in productCategories" :key="category" :value="category" :label="category" />
+					</el-select>
+					<el-checkbox v-model="onlyReviewRows">仅看待核对 / 待确认行</el-checkbox>
+					<span v-if="!locked">已选 {{ batchRows.length }} 项（跨页保留）</span>
+					<el-button v-if="batchRows.length" link @click="selectedRowIds = []">清空选择</el-button>
+				</div>
+				<p v-if="missingRowIdCount && !locked" class="q-muted">{{ missingRowIdCount }} 行缺少历史行标识，请逐行设置范围；这些行暂不支持批量选择。</p>
+				<el-table
+					:data="visibleProductRows"
+					:row-key="productRowKey"
+					class="q-table"
+					max-height="450"
+					:row-class-name="rowClass"
+					@row-dblclick="openRow"
+				>
+					<el-table-column v-if="!locked" width="45">
+						<template #header><el-checkbox :model-value="allVisibleSelected" :disabled="!selectableVisibleRows.length" :indeterminate="someVisibleSelected && !allVisibleSelected" aria-label="选择当前页" @change="togglePageSelection" /></template>
+						<template #default="{ row }"><el-checkbox :model-value="selectedRowIds.includes(row.row_id)" :disabled="!row.row_id" :aria-label="`选择 ${row.name}`" @change="(checked) => toggleRowSelection(row, checked)" /></template>
+					</el-table-column>
+					<el-table-column type="index" :index="visibleRowNumber" label="#" width="48" />
+					<el-table-column v-if="hasSourceRows" label="原表来源" min-width="175">
+						<template #default="{ row }">
+							<el-tooltip :content="customerSourceLabel(row)" placement="top"
+								><el-button link type="primary" @click="openSource(originalIndex(row))">{{ customerSourceLabel(row) }}</el-button></el-tooltip
+							>
+						</template>
+					</el-table-column>
 					<el-table-column label="产品名称" min-width="170"
 						><template #default="{ row }"><el-input v-model="row.name" :disabled="locked" placeholder="产品名称" /></template
 					></el-table-column>
+					<el-table-column label="报价范围" min-width="165">
+						<template #default="{ row }">
+							<div class="material-status-cell">
+								<el-tag :type="row.excluded ? 'info' : row.installation_only ? 'warning' : 'success'" effect="plain" size="small">{{ quoteScopeLabel(row) }}</el-tag>
+								<small v-if="row.excluded">{{ row.exclude_reason }}</small>
+								<el-button v-if="!locked" link type="primary" @click="scopeDialog?.open([row])">设置范围</el-button>
+							</div>
+						</template>
+					</el-table-column>
 					<el-table-column label="规格描述" min-width="155"
 						><template #default="{ row }"
 							><el-input
@@ -264,81 +313,125 @@
 						><template #default="{ row }"><el-input v-model="row.unit" :disabled="locked" /></template
 					></el-table-column>
 					<el-table-column label="材料计算 / 状态" min-width="280"
-						><template #default="{ $index }"
+						><template #default="{ row }"
 							><div class="material-status-cell">
-								<template v-if="dirty">
-									<el-tag type="warning" effect="light" size="small">修改后待计算</el-tag>
-									<span>保存并计算后刷新本行结果</span>
+								<template v-if="row.excluded">
+									<el-tag type="info" effect="plain" size="small">不报价</el-tag><span>{{ row.exclude_reason }}</span>
 								</template>
-								<template v-else-if="quote.result?.rows[$index]?.status === 'priced'">
+								<template v-else-if="rowModified(originalIndex(row))">
+									<el-tag type="warning" effect="light" size="small">已修改，待试算</el-tag>
+									<span>可继续修改其他项目，最后统一保存并试算</span>
+									<small v-if="previousPendingReason(originalIndex(row))" class="q-muted">上次待确认：{{ previousPendingReason(originalIndex(row)) }}</small>
+								</template>
+								<template v-else-if="row.installation_only">
+									<el-tag type="info" effect="plain" size="small">不含材料</el-tag><span>仅参与安装报价</span>
+								</template>
+								<template v-else-if="dirty || ((!quote.result || quote.result_stale) && rowAttention(originalIndex(row)) === 'pending')">
+									<el-tag :type="rowAttention(originalIndex(row)) === 'pending' ? 'warning' : 'info'" effect="light" size="small">
+										{{ rowAttention(originalIndex(row)) === 'pending' ? '上次试算待确认' : '等待重新试算' }}
+									</el-tag>
+									<span>{{ previousPendingReason(originalIndex(row)) || '保存并试算后刷新本行结果' }}</span>
+								</template>
+								<template v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'priced'">
 									<el-tag type="success" effect="light" size="small">已计算</el-tag>
-									<span>{{ materialSummary($index) }}</span>
-									<small v-if="materialExtraSummary($index)">{{ materialExtraSummary($index) }}</small>
+									<span>{{ materialSummary(originalIndex(row)) }}</span>
+									<small v-if="materialExtraSummary(originalIndex(row))">{{ materialExtraSummary(originalIndex(row)) }}</small>
 								</template>
-								<template v-else-if="quote.result?.rows[$index]?.status === 'pending'">
+								<template v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'pending'">
 									<el-tag type="danger" effect="dark" size="small">待确认</el-tag>
-									<span class="q-error">{{ quote.result?.rows[$index]?.reason }}</span>
+									<span class="q-error">{{ quote.result?.rows[originalIndex(row)]?.reason }}</span>
 								</template>
-								<template v-else-if="quote.result?.rows[$index]?.status === 'excluded'">
-									<el-tag type="info" effect="plain" size="small">不计价</el-tag>
-									<span>{{ quote.result?.rows[$index]?.reason }}</span>
+								<template v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'excluded'">
+									<el-tag type="info" effect="plain" size="small">不报价</el-tag>
+									<span>{{ quote.result?.rows[originalIndex(row)]?.reason }}</span>
 								</template>
 								<template v-else>
-									<el-tag type="info" effect="plain" size="small">未计算</el-tag>
-									<span>保存并计算后查看结果</span>
+									<el-tag :type="rowAttention(originalIndex(row)) === 'review' ? 'warning' : 'info'" effect="plain" size="small">
+										{{ rowAttention(originalIndex(row)) === 'review' ? '待核对' : '等待试算' }}
+									</el-tag>
+									<span>{{
+										rowAttention(originalIndex(row)) === 'review'
+											? rowReviewReason(originalIndex(row)) || (!row.source_issue_confirmed && row.source_issue_reason) || '请核对清单信息及安装条件'
+											: '保存并试算后查看结果'
+									}}</span>
 								</template>
+								<small
+									v-if="!row.excluded && (dirty || quote.result?.rows[originalIndex(row)] || row.installation_only) && currentAiConfidenceReason(row, quote.body.ai_review_status)"
+									class="review-reminder"
+								>
+									{{ currentAiConfidenceReason(row, quote.body.ai_review_status) }}
+								</small>
+								<small v-if="currentAiCorrectionReason(row)" class="q-muted">系统纠正说明：{{ currentAiCorrectionReason(row) }}</small>
 							</div></template
 						></el-table-column
 					>
 					<el-table-column label="材料金额" width="130" align="right"
-						><template #default="{ $index }"
-							><span v-if="dirty" class="q-muted">—</span
-							><span v-else-if="quote.result?.rows[$index]?.status === 'priced'" class="q-number">{{
-								money(quote.result?.rows[$index]?.amount, rowDigits($index))
+						><template #default="{ row }"
+							><span v-if="row.excluded" class="q-muted">不报价</span
+							><span v-else-if="row.installation_only" class="q-muted">不含材料</span
+							><span v-else-if="dirty" class="q-muted">—</span
+							><span v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'priced'" class="q-number">{{
+								money(quote.result?.rows[originalIndex(row)]?.amount, rowDigits(originalIndex(row)))
 							}}</span
-							><el-tag v-else-if="quote.result?.rows[$index]?.status === 'pending'" type="danger" effect="dark" size="small">待确认</el-tag
-							><span v-else-if="quote.result?.rows[$index]?.status === 'excluded'" class="q-muted">不计价</span
+							><el-tag v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'pending'" type="danger" effect="dark" size="small">待确认</el-tag
+							><span v-else-if="quote.result?.rows[originalIndex(row)]?.status === 'excluded'" class="q-muted">不报价</span
 							><span v-else class="q-muted">—</span></template
 						></el-table-column
 					>
 					<el-table-column v-if="quote.body.installation_options?.included" label="安装费用" width="130" align="right">
-						<template #default="{ $index }">
-							<span v-if="dirty" class="q-muted">—</span>
-							<el-tag v-else-if="quote.result?.rows[$index]?.installation_status === 'pending'" type="danger" effect="dark" size="small"
+						<template #default="{ row }">
+							<span v-if="row.excluded" class="q-muted">不报价</span>
+							<span v-else-if="dirty" class="q-muted">—</span>
+							<el-tag v-else-if="quote.result?.rows[originalIndex(row)]?.installation_status === 'pending'" type="danger" effect="dark" size="small"
 								>待确认</el-tag
 							>
-							<span v-else-if="quote.result?.rows[$index]?.installation_status === 'excluded'" class="q-muted">不含安装</span>
-							<span v-else class="q-number">{{ money(quote.result?.rows[$index]?.installation_amount, 2) }}</span>
+							<span v-else-if="quote.result?.rows[originalIndex(row)]?.installation_status === 'excluded'" class="q-muted">不含安装</span>
+							<span v-else class="q-number">{{ money(quote.result?.rows[originalIndex(row)]?.installation_amount, 2) }}</span>
 						</template>
 					</el-table-column>
 					<el-table-column v-if="quote.body.installation_options?.included" label="本行报价" width="130" align="right">
-						<template #default="{ $index }">
-							<span v-if="dirty" class="q-muted">—</span
-							><span v-else-if="quote.result?.rows[$index]?.line_total != null" class="q-number">{{
-								money(quote.result?.rows[$index]?.line_total, 2)
+						<template #default="{ row }">
+							<span v-if="row.excluded" class="q-muted">不报价</span
+							><span v-else-if="dirty" class="q-muted">—</span
+							><span v-else-if="quote.result?.rows[originalIndex(row)]?.line_total != null" class="q-number">{{
+								money(quote.result?.rows[originalIndex(row)]?.line_total, 2)
 							}}</span
-							><el-tag v-else-if="rowNeedsAttention($index)" type="danger" effect="dark" size="small">待确认</el-tag
+							><el-tag
+								v-else-if="rowNeedsAttention(originalIndex(row))"
+								:type="rowAttention(originalIndex(row)) === 'pending' ? 'danger' : 'warning'"
+								effect="light"
+								size="small"
+								>{{ rowAttention(originalIndex(row)) === 'pending' ? '待确认' : '待核对' }}</el-tag
 							><span v-else class="q-muted">—</span></template
 						></el-table-column
 					>
 					<el-table-column width="100" fixed="right"
-						><template #default="{ row, $index }"
+						><template #default="{ row }"
 							><div class="material-status-cell">
 								<el-button
-									v-if="!locked && (!row.category || quote.result?.rows[$index]?.status === 'pending')"
+									v-if="!locked && !row.excluded && !row.installation_only && (!row.category || rowReviewResult(originalIndex(row))?.status === 'pending')"
 									link
 									type="primary"
 									@click="openProductRule(row)"
 								>
 									匹配规则
 								</el-button>
-								<el-button :type="!dirty && rowNeedsAttention($index) ? 'danger' : 'primary'" link @click="openRow(row)">{{
-									!dirty && rowNeedsAttention($index) ? '立即处理' : '参数 / 明细'
-								}}</el-button>
+								<el-button
+									:type="rowModified(originalIndex(row)) ? 'primary' : rowAttention(originalIndex(row)) === 'pending' ? 'danger' : rowAttention(originalIndex(row)) === 'review' ? 'warning' : 'primary'"
+									link
+									@click="openRow(row)"
+								>
+									{{
+										rowModified(originalIndex(row)) ? '继续修改' : rowAttention(originalIndex(row)) === 'pending'
+											? '立即处理'
+											: rowAttention(originalIndex(row)) === 'review' ? '核对信息' : '参数 / 明细'
+									}}
+								</el-button>
 							</div></template
 						></el-table-column
 					>
 				</el-table>
+				<el-pagination v-model:current-page="productPage" v-model:page-size="productPageSize" :page-sizes="[50, 100]" :total="filteredProductRows.length" layout="total, sizes, prev, pager, next, jumper" style="margin-top: 14px" />
 				<details v-if="quote.body.source_sheets?.length" style="margin-top: 12px">
 					<summary>查看整份文件导入情况（{{ quote.body.source_sheets.length }} 个工作表）</summary>
 					<p v-for="sheet in quote.body.source_sheets" :key="sheet.name" class="q-muted">
@@ -412,9 +505,9 @@
 				</p>
 				<div class="q-toolbar q-sticky">
 					<template v-if="canExport"
-						><el-button :disabled="!exportable" @click="exportQuote('draft')">导出可编辑校对版</el-button
+						><el-button :disabled="!exportable || !!exporting" :loading="exporting === 'draft'" @click="exportQuote('draft')">导出可编辑校对版</el-button
 						><el-button :disabled="!exportable || locked" @click="chooseReviewFile">导入已完善校对版</el-button
-						><el-button type="primary" :disabled="!exportable || !quote.result?.formal_ready" @click="exportQuote('formal')"
+						><el-button type="primary" :disabled="!exportable || !quote.result?.formal_ready || !!exporting" :loading="exporting === 'formal'" @click="exportQuote('formal')"
 							>生成正式报价</el-button
 						></template
 					>
@@ -436,10 +529,30 @@
 			:quote-body="quote?.body"
 			:requires-ai-review="!!quote?.body.ai_review_status"
 			:on-apply="applyProductRule"
+			@rules-changed="productRulesChanged"
 		/>
+		<SourceCompareDialog
+			v-if="quote"
+			ref="sourceCompareDialog"
+			:rows="quote.body.rows"
+			:ai-review-status="quote.body.ai_review_status"
+			v-model:index="sourceIndex"
+			@edit="openRow"
+		/>
+		<BatchParameterDialog ref="batchParameterDialog" :rows="batchRows" :locked="locked || busy || saving || reviewingAi" @applied="batchApplied" />
+		<QuoteScopeDialog ref="scopeDialog" :installation-included="!!quote?.body.installation_options?.included" :locked="locked || busy || saving || reviewingAi" @applied="scopeApplied" @installation-setup="openInstallationSetup" />
 		<input ref="reviewFile" type="file" accept=".xlsx" hidden @change="previewReviewFile" />
 		<el-dialog v-model="reviewDialog" title="确认回导人工报价" width="min(1500px, 96vw)" top="4vh" class="review-import-dialog" destroy-on-close>
 			<template v-if="reviewPreview">
+				<section v-if="reviewPreview.scope_restorations?.length" class="review-import-section">
+					<el-alert title="以下填价会恢复参与供货报价，请逐项明确确认" description="预览合计仍按原报价范围计算。全部勾选后才能回导；如不恢复，请取消并修改校对文件后重新上传。" type="warning" :closable="false" />
+					<p class="q-muted">安装请填写安装金额；仅填安装单价不会生成报价。</p>
+					<el-checkbox-group v-model="restoreScopeRowIds">
+						<div v-for="item in reviewPreview.scope_restorations" :key="item.source_row_id">
+							<el-checkbox :label="item.source_row_id">{{ item.name }}：{{ item.previous_scope === 'excluded' ? '不报价' : '仅安装' }} → 参与供货报价</el-checkbox>
+						</div>
+					</el-checkbox-group>
+				</section>
 				<el-alert
 					:title="
 						reviewPreview.pending_count
@@ -508,7 +621,7 @@
 			</template>
 			<template #footer>
 				<el-button @click="reviewDialog = false">取消</el-button>
-				<el-button type="primary" :disabled="!reviewPreview?.change_count" @click="applyReviewFile"
+				<el-button type="primary" :disabled="!reviewPreview?.change_count || !allScopeRestorationsConfirmed" @click="applyReviewFile"
 					>确认回导 {{ reviewPreview?.changed_row_count || 0 }} 个产品</el-button
 				>
 			</template>
@@ -571,9 +684,19 @@
 		>
 			<div v-if="selectedRow" class="quotation-page">
 				<el-alert
-					v-if="selectedResult?.reason || rowReviewReason(selected)"
-					:title="selectedResult?.reason || rowReviewReason(selected)"
-					type="warning"
+					v-if="currentAiCorrectionReason(selectedRow)"
+					title="系统纠正说明"
+					:description="currentAiCorrectionReason(selectedRow)"
+					type="info"
+					:closable="false"
+					show-icon
+					style="margin-bottom: 14px"
+				/>
+				<el-alert
+					v-if="!selectedRow.excluded && (selectedResult?.reason || rowReviewReason(selected))"
+					:title="[selectedResult?.reason, rowReviewReason(selected)].filter(Boolean).join('；')"
+					:description="selectedConfidenceReason ? aiConfidenceDetails(selectedRow) : undefined"
+					:type="selectedConfidenceReason ? 'error' : 'warning'"
 					:closable="false"
 					style="margin-bottom: 14px"
 				/>
@@ -591,6 +714,12 @@
 				<el-form label-position="top" :disabled="locked" class="q-grid two" @submit.prevent>
 					<el-form-item label="产品名称" class="q-wide"><el-input v-model="selectedRow.name" /></el-form-item>
 					<el-form-item label="规格描述" class="q-wide"><el-input v-model="selectedRow.spec" type="textarea" /></el-form-item>
+					<el-form-item v-for="field in rowProductDescriptionFields(selectedRow)" :key="field.key" :label="field.label" class="q-wide">
+						<el-input v-model="selectedRow.attributes[field.key]" type="textarea" />
+					</el-form-item>
+					<p v-if="equipmentKindSourceLabel(selectedRow.attributes.equipment_kind_source)" class="q-muted q-wide">
+						计算类型来源：{{ equipmentKindSourceLabel(selectedRow.attributes.equipment_kind_source) }}
+					</p>
 					<el-form-item v-if="!selectedEquipment" label="工程量总面积（㎡）"><el-input v-model="selectedRow.engineering_quantity" /></el-form-item>
 					<template v-else>
 						<el-form-item label="设备数量"><el-input v-model="selectedRow.quantity" /></el-form-item>
@@ -612,7 +741,13 @@
 						}}</span>
 					</div>
 					<el-form-item v-for="field in selectedFields" :key="field.key" :label="field.label">
-						<el-select v-if="field.choices" v-model="selectedRow.attributes[field.key]" clearable placeholder="按清单 / 整单条件">
+						<el-select
+							v-if="field.choices"
+							:model-value="equipmentParameterValue(selectedRow.attributes, field.key, selectedRow.attributes.equipment_kind || selectedRuleBody?.attributes.equipment_kind, selectedRuleBody?.canonical_name || selectedRow.name)"
+							clearable
+							placeholder="按清单 / 整单条件"
+							@update:model-value="updateRowParameter(selectedRow, field.key, $event, selectedRow.attributes.equipment_kind || selectedRuleBody?.attributes.equipment_kind, selectedRuleBody?.canonical_name || selectedRow.name)"
+						>
 							<el-option v-for="[value, label] in field.choices" :key="value" :value="value" :label="label" />
 						</el-select>
 						<el-input v-else v-model="selectedRow.attributes[field.key]" :placeholder="field.placeholder || '清单缺项时补充'" />
@@ -631,6 +766,16 @@
 							@update:model-value="selectedRow.attributes[parameter.key] = $event"
 						/>
 					</el-form-item>
+					<section v-if="selectedResult?.equipment_kind === 'purchased' && selectedResult.candidates?.length" class="fan-selection q-wide">
+						<h3>换气扇候选型号</h3>
+						<p class="q-error">{{ selectedResult.reason }}</p>
+						<el-radio-group v-model="selectedRow.candidate_id" :disabled="locked" aria-label="换气扇候选" class="fan-candidates">
+							<el-radio v-for="candidate in selectedResult.candidates" :key="candidate.id" :label="candidate.id">
+								{{ candidate.body.attributes.name }} / {{ candidate.body.name }}；风量 {{ candidate.body.attributes.airflow }} m³/h；功率 {{ candidate.body.attributes.power || '未提供' }}{{ candidate.body.attributes.power ? ' W' : '' }}
+							</el-radio>
+						</el-radio-group>
+						<p class="q-muted">请选择确认采用的型号，保存并试算后计价。</p>
+					</section>
 					<section v-if="selectedRow.category === '风机'" class="fan-selection q-wide">
 						<div class="drawer-section-heading">
 							<h3>系统选型结果</h3>
@@ -693,15 +838,16 @@
 					</section>
 					<el-form-item label="客户备注" class="q-wide"><el-input v-model="selectedRow.remark" type="textarea" /></el-form-item>
 					<div class="q-wide">
-						<el-checkbox v-model="selectedRow.excluded">本行不计价（标题、合计或范围外项目）</el-checkbox>
-						<el-input v-if="selectedRow.excluded" v-model="selectedRow.exclude_reason" placeholder="必须填写不计价原因" style="margin: 8px 0" />
-						<p v-if="selectedRow.source_issue_reason" class="q-error">{{ selectedRow.source_issue_reason }}</p>
+						<el-tag effect="plain" :type="selectedRow.excluded ? 'info' : selectedRow.installation_only ? 'warning' : 'success'">{{ quoteScopeLabel(selectedRow) }}</el-tag>
+						<el-button v-if="!locked" link type="primary" @click="scopeDialog?.open([selectedRow])">设置报价范围</el-button>
+						<p v-if="selectedRow.excluded" class="q-muted">不报价原因：{{ selectedRow.exclude_reason }}</p>
+						<p v-if="!selectedRow.excluded && selectedRow.source_issue_reason" class="q-error">{{ selectedRow.source_issue_reason }}</p>
 						<el-checkbox v-if="selectedRow.source_issue" v-model="selectedRow.source_issue_confirmed"
 							>已核对原资料异常或参数冲突，并确认本次采用的数据</el-checkbox
 						>
 					</div>
 				</el-form>
-				<section v-if="quote.body.installation_options?.included && selectedRow.installation" class="drawer-installation">
+				<section v-if="!selectedRow.excluded && quote.body.installation_options?.included && selectedRow.installation" class="drawer-installation">
 					<div class="drawer-section-heading">
 						<h2>本行安装条件</h2>
 						<el-tag v-if="selectedResult?.installation_status === 'priced'" type="success" effect="light">已计算</el-tag>
@@ -740,7 +886,8 @@
 							<div v-for="(component, index) in selectedResult.detail.components" :key="index" class="q-trace">
 								<strong
 									>{{ component.name }}<span>{{ money(component.amount, 2) }} 元</span></strong
-								><code>用量 {{ component.quantity }} × 未税成本 {{ component.unit_cost }} 元</code>
+								><code>用量 {{ component.effective_quantity ?? component.quantity }} × {{ component.price_basis === 'sale' ? '已定未税售价（不再加毛利）' : '未税成本' }} {{ component.price_basis === 'sale' ? component.unit_sale_price : component.unit_cost }} 元</code>
+								<code v-if="mechanismCostExplanation(component.detail)">{{ mechanismCostExplanation(component.detail) }}</code>
 							</div>
 						</template>
 						<div
@@ -751,6 +898,7 @@
 							<strong
 								>{{ equipmentComponents[key] || key }}<span>{{ value }}</span></strong
 							>
+							<code v-if="key === 'mechanism' && mechanismCostExplanation(selectedResult.detail)">{{ mechanismCostExplanation(selectedResult.detail) }}</code>
 						</div>
 					</details>
 					<p v-if="dirty" class="q-muted">参数修改后需重新试算。</p>
@@ -783,19 +931,19 @@
 					</div>
 					<div class="q-trace">
 						<strong
-							>材料金额 <span>{{ money(selectedResult.amount, rowDigits(selected)) }}</span></strong
+							>材料金额 <span>{{ selectedRow.excluded ? '不报价' : selectedRow.installation_only ? '不含材料' : money(selectedResult.amount, rowDigits(selected)) }}</span></strong
 						>
 					</div>
 					<div v-if="quote.body.installation_options?.included" class="q-trace">
 						<strong
 							>安装费用
-							<span>{{ selectedResult.installation_status === 'pending' ? '待确认' : money(selectedResult.installation_amount, 2) }}</span></strong
+							<span>{{ selectedRow.excluded ? '不报价' : selectedResult.installation_status === 'pending' ? '待确认' : money(selectedResult.installation_amount, 2) }}</span></strong
 						>
 						<code v-if="selectedResult.installation_reason">{{ selectedResult.installation_reason }}</code>
 					</div>
 					<div v-if="quote.body.installation_options?.included" class="q-trace">
 						<strong
-							>本行报价 <span>{{ money(selectedResult.line_total, 2) }}</span></strong
+							>本行报价 <span>{{ selectedRow.excluded ? '不报价' : money(selectedResult.line_total, 2) }}</span></strong
 						>
 					</div>
 				</section>
@@ -807,14 +955,33 @@
 <script setup lang="ts" name="QuotationWorkbench">
 /** 报价工作台主页面：维护客户清单与整单条件，协调导入、逐行规则、安装、人工核验、保存试算及草稿/正式导出。金额与正式可导出状态以服务端结果为准。 */
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import type { ComputedRef } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { auth } from '/@/utils/authFunction';
 import { quoteApi } from '/@/api/quotation';
+import type { QuoteMutationResult } from '/@/api/quotation';
 import { money, stateLabels, report, confirm, blankRow, rowFields, flangeTypes, shapes, productStates } from '/@/views/quotation/shared';
 import type { Catalog, Quote, QuoteRow, ExportRecord, InstallationCatalogBody, ReviewImportPreview, AiInputImportPreview, ProductRuleBody } from '/@/types/quotation';
 import ProductRuleDialog from './ProductRuleDialog.vue';
-import { currentReviewReason } from './rowReview';
+import SourceCompareDialog from './SourceCompareDialog.vue';
+import BatchParameterDialog from './BatchParameterDialog.vue';
+import QuoteScopeDialog from './QuoteScopeDialog.vue';
+import { filterQuoteRows, pageQuoteRows, quoteScopeCounts, quoteScopeLabel, selectPageRows, selectedQuoteRows, scopeRestorationsConfirmed, scopePaymentTerms } from './quoteScope';
+import { customerSourceLabel } from './batchParameters';
+import { previousRowReview, reviewRowModified, updateReviewSnapshot } from './pendingReview';
+import type { ReviewSnapshot } from './pendingReview';
+import { createQuoteEditState } from './quoteEditState';
+import {
+	aiConfidenceDetails,
+	currentAiConfidenceReason,
+	currentAiCorrectionReason,
+	currentReviewReason,
+	equipmentKindSourceLabel,
+	rowAttentionState,
+	rowProductDescriptionFields,
+	updateRowParameter,
+} from './rowReview';
 import InstallationPanel from './InstallationPanel.vue';
 import InstallationEntryFields from './InstallationEntryFields.vue';
 import ReviewImportTable from './ReviewImportTable.vue';
@@ -823,25 +990,29 @@ import QuoteList from '/@/views/quotation/QuoteList.vue';
 import ImportDialog from '/@/views/quotation/ImportDialog.vue';
 import AiImportDialog from '/@/views/quotation/AiImportDialog.vue';
 import '/@/views/quotation/quotation.scss';
-import { equipmentCategories, equipmentFields, equipmentFieldsFor, equipmentComponents } from '/@/views/quotation/equipment';
+import { equipmentCategories, equipmentFields, equipmentFieldsFor, equipmentComponents, equipmentParameterValue, mechanismCostExplanation } from '/@/views/quotation/equipment';
 const route = useRoute(),
 	router = useRouter();
-/** quote 保存当前报价版本及上次计算结果；baseline 记录已保存正文，busy/saving 区分一般请求与保存过程。 */
+/** quote 保存当前报价版本及上次计算结果；busy/saving 区分一般请求与保存过程。 */
 const quote = ref<Quote>(),
 	catalogs = ref<Catalog[]>([]),
 	busy = ref(false),
+	exporting = ref(''),
 	saving = ref(false),
 	reviewingAi = ref(false),
-	failed = ref(false),
-	baseline = ref('');
+	failed = ref(false);
+const reviewSnapshot = ref<ReviewSnapshot>();
+const rowModifications = new WeakMap<QuoteRow, ComputedRef<boolean>>();
 /** 普通导入、AI 导入和产品规则组件通过引用打开；两类回导各自保存预览，AI 回导另绑定目标报价 ID 与修订号。 */
 const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	aiImportDialog = ref<InstanceType<typeof AiImportDialog>>(),
 	productRuleDialog = ref<InstanceType<typeof ProductRuleDialog>>(),
 	productRules = ref<Catalog<ProductRuleBody>[]>([]),
+	productRulesLoadState = ref<'loading' | 'ready' | 'error'>('loading'),
 	reviewFile = ref<HTMLInputElement>(),
 	reviewDialog = ref(false),
 	reviewPreview = ref<ReviewImportPreview>(),
+	restoreScopeRowIds = ref<string[]>([]),
 	aiInputFile = ref<HTMLInputElement>(),
 	aiInputDialog = ref(false),
 	aiInputBusy = ref(false),
@@ -851,15 +1022,70 @@ const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	aiInputError = ref(''),
 	drawer = ref(false),
 	selected = ref(0),
+	onlyReviewRows = ref(false),
+	productSearch = ref(''),
+	productCategory = ref(''),
+	productPage = ref(1),
+	productPageSize = ref(50),
 	sections = ref(['conditions']);
+const hasDraftProductRules = computed(() => productRules.value.some((rule) => rule.status === 'draft'));
+const productRulesNotice = computed(() => {
+	if (productRulesLoadState.value === 'error')
+		return hasDraftProductRules.value
+			? '产品规则管理：规则状态刷新失败，仍有已知待处理草稿，请重新加载。'
+			: '产品规则管理：规则状态刷新失败，草稿状态未知，请重新加载。';
+	if (productRulesLoadState.value === 'loading')
+		return hasDraftProductRules.value ? '产品规则管理：正在刷新，仍有已知待处理草稿。' : '产品规则管理：正在读取规则状态。';
+	return hasDraftProductRules.value
+		? '产品规则管理：有待处理草稿（含未发布修订），请核对并发布。'
+		: '产品规则管理：当前可见规则没有待处理草稿。';
+});
+let productRulesRequest = 0;
 /** 编辑与导出按钮分别检查账号权限；只有草稿可编辑，已定稿或归档版本通过修订继续处理。 */
 const canEdit = computed(() => auth('quote_edit')),
 	canExport = computed(() => auth('quote_export'));
 const locked = computed(() => !canEdit.value || quote.value?.state !== 'draft');
+const sourceCompareDialog = ref<InstanceType<typeof SourceCompareDialog>>(),
+	batchParameterDialog = ref<InstanceType<typeof BatchParameterDialog>>(),
+	scopeDialog = ref<InstanceType<typeof QuoteScopeDialog>>(),
+	sourceIndex = ref(0),
+	selectedRowIds = ref<string[]>([]);
+const batchRows = computed(() => selectedQuoteRows(quote.value?.body.rows || [], selectedRowIds.value));
+const hasSourceRows = computed(() => quote.value?.body.rows.some((row) => !!row.original || !!row.source_sheet || row.source_row != null));
+watch(
+	() => quote.value?.id,
+	() => {
+		selectedRowIds.value = [];
+		productPage.value = 1;
+		productSearch.value = '';
+		productCategory.value = '';
+	}
+);
+function toggleRowSelection(row: QuoteRow, checked: boolean | string | number) {
+	selectedRowIds.value = selectPageRows(selectedRowIds.value, [row], !!checked);
+}
+function togglePageSelection(checked: boolean | string | number) {
+	selectedRowIds.value = selectPageRows(selectedRowIds.value, visibleProductRows.value, !!checked);
+}
+function scopeApplied(count: number) {
+	ElMessage.success(`已设置 ${count} 行报价范围，请保存并重新核验或试算`);
+}
+function openInstallationSetup() {
+	drawer.value = false;
+	document.getElementById('quote-installation-conditions')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function openSource(index: number) {
+	sourceIndex.value = index;
+	sourceCompareDialog.value?.open();
+}
+function batchApplied(count: number) {
+	ElMessage.success(`已补充 ${count} 行，请保存并重新核验或试算`);
+}
 /** 校对价格回导按已修改、仍待补全、未修改三组展示，便于确认人工修改及未完成报价的产品。 */
 const changedReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => row.changed) || []),
 	pendingReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => row.pending && !row.changed) || []),
 	unchangedReviewRows = computed(() => reviewPreview.value?.review_rows.filter((row) => !row.changed && !row.pending) || []);
+const allScopeRestorationsConfirmed = computed(() => scopeRestorationsConfirmed(reviewPreview.value?.scope_restorations || [], restoreScopeRowIds.value));
 const options = computed(() => quote.value!.body.duct_options);
 const isAuto = computed(() => quote.value?.body.recognition_mode === 'auto_v1');
 /** AI 清单处于 pending 时必须人工核验才能试算；未知名称计数帮助报价员检查识别失败项目。 */
@@ -868,8 +1094,8 @@ const aiReviewPending = computed(() => quote.value?.body.ai_review_status === 'p
 const aiReviewRequired = computed(() => !!quote.value?.body.ai_review_status && (aiReviewPending.value || dirty.value));
 const aiUnknownNameCount = computed(() => quote.value?.body.rows.filter((row) => row.name === '待识别材料').length || 0);
 /** 按未排除行决定整单风管/设备条件是否显示；清单识别摘要仍保留每类数量，未知产品单独展示。 */
-const hasDuctRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && row.category === '风管'));
-const hasEquipmentRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && row.category && row.category !== '风管'));
+const hasDuctRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && !row.installation_only && row.category === '风管'));
+const hasEquipmentRows = computed(() => quote.value?.body.rows.some((row) => !row.excluded && !row.installation_only && row.category && row.category !== '风管'));
 const recognitionSummary = computed(() => {
 	const rows = quote.value?.body.rows || [];
 	return `风管 ${rows.filter((row) => row.category === '风管').length} 项 / 设备 ${
@@ -926,14 +1152,31 @@ const selectedFields = computed<{ key: string; label: string; choices?: string[]
 	return selectedEquipment.value
 		? equipmentFieldsFor(
 				selectedRow.value?.category || '',
-				selectedRow.value?.attributes.equipment_kind || selectedRuleBody.value?.attributes.equipment_kind || ''
+				selectedRow.value?.attributes.equipment_kind || selectedRuleBody.value?.attributes.equipment_kind || '',
+				[selectedRuleBody.value?.canonical_name, selectedRow.value?.name, selectedRow.value?.spec, selectedRow.value?.remark].filter(Boolean).join(' '),
+				{ ...selectedRuleBody.value?.attributes, ...selectedRow.value?.attributes }
 		  )
 		: rowFields;
 });
 /** 正文改变即标记未保存；当前行和计算行按相同索引对应，参数修改后显示的选型仍属于上次结果。 */
-const dirty = computed(() => !!quote.value && JSON.stringify(quote.value.body) !== baseline.value);
+const { dirty, rowIndices, resetBaseline } = createQuoteEditState(() => quote.value?.body);
+const hasModifiedRows = computed(() => (quote.value?.body.rows || []).some((_row, index) => rowModified(index)));
 const selectedRow = computed(() => quote.value?.body.rows[selected.value]),
 	selectedResult = computed(() => quote.value?.result?.rows[selected.value]);
+const selectedConfidenceReason = computed(() => currentAiConfidenceReason(selectedRow.value, quote.value?.body.ai_review_status));
+const productCategories = computed(() => [...new Set((quote.value?.body.rows || []).map((row) => row.category || '待识别'))]);
+const filteredProductRows = computed(() => {
+	const rows = filterQuoteRows(quote.value?.body.rows || [], productSearch.value, productCategory.value);
+	return onlyReviewRows.value ? rows.filter((row) => rowNeedsAttention(originalIndex(row))) : rows;
+});
+const visibleProductRows = computed(() => pageQuoteRows(filteredProductRows.value, productPage.value, productPageSize.value));
+const missingRowIdCount = computed(() => (quote.value?.body.rows || []).filter((row) => !row.row_id).length);
+const selectableVisibleRows = computed(() => visibleProductRows.value.filter((row) => !!row.row_id));
+const allVisibleSelected = computed(() => !!selectableVisibleRows.value.length && selectableVisibleRows.value.every((row) => selectedRowIds.value.includes(row.row_id!)));
+const someVisibleSelected = computed(() => visibleProductRows.value.some((row) => !!row.row_id && selectedRowIds.value.includes(row.row_id)));
+const scopeCounts = computed(() => quoteScopeCounts(quote.value?.body.rows || [], dirty.value ? [] : quote.value?.result?.rows || [], rowNeedsAttention));
+watch([productSearch, productCategory, onlyReviewRows, productPageSize], () => { productPage.value = 1; });
+watch(() => filteredProductRows.value.length, (length) => { productPage.value = Math.min(productPage.value, Math.max(1, Math.ceil(length / productPageSize.value))); });
 const selectedFan = computed(() => selectedResult.value?.detail?.selected_fan);
 const selectedFanDisplayName = computed(() =>
 	[selectedFan.value?.family, selectedFan.value?.model].filter((value, index, values) => value && values.indexOf(value) === index).join(' · ')
@@ -984,11 +1227,9 @@ function activeResource(kind: string) {
 const activeCatalog = computed(() => activeResource('duct_catalog'));
 const activeEquipment = computed(() => activeResource('equipment_catalog'));
 const activeInstallation = computed(() => activeResource('installation_catalog')?.body as unknown as InstallationCatalogBody | undefined);
-/** 付款方案跟随生效材料指标与是否安装选择；自动识别的纯风管清单使用风管付款方案，混合/设备清单使用设备方案。 */
+/** 付款方案优先跟随供货组，全仅安装按安装产品分组；整单是否安装仍由原安装选项控制。 */
 const orderPaymentTerms = computed(() =>
-	((!isEquipment.value || (isAuto.value && !hasEquipmentRows.value) ? activeCatalog.value : activeEquipment.value)?.body.payment_terms || []).filter(
-		(t) => t.mode === (quote.value?.body.installation_options?.included ? 'with_install' : 'no_install')
-	)
+	scopePaymentTerms(quote.value?.body.rows || [], quote.value?.body.pricing_mode || '', activeCatalog.value?.body.payment_terms || [], activeEquipment.value?.body.payment_terms || [], !!quote.value?.body.installation_options?.included)
 );
 /** 混合报价同步设备整单含税、付款和安装状态到风管默认条件，保证同一订单使用统一结算口径。 */
 function syncEquipment() {
@@ -1047,25 +1288,69 @@ function canShowReviewReason() {
 }
 /** 按最新规则试算状态读取有效核验提示，避免已计算行、操作按钮和明细继续使用旧提醒。 */
 function rowReviewReason(index: number) {
-	return currentReviewReason(quote.value?.body.rows[index], quote.value?.result?.rows[index], canShowReviewReason());
+	const result = rowReviewResult(index);
+	return currentReviewReason(quote.value?.body.rows[index], result, canShowReviewReason() || !!result, quote.value?.body.ai_review_status);
 }
-/** 材料待确认、安装待确认或允许显示的核验理由均需关注，不能只看材料是否已有价格。 */
+/** 待处理依据单独按行 ID 保存，旧金额不参与显示、汇总或正式导出。 */
+function rowReviewResult(index: number) {
+	if (!dirty.value && !quote.value?.result_stale && quote.value?.result) return quote.value.result.rows[index];
+	if (reviewSnapshot.value?.quoteId !== quote.value?.id) return undefined;
+	return previousRowReview(reviewSnapshot.value, quote.value?.body.rows[index], !!quote.value?.body.installation_options?.included);
+}
+function rowModified(index: number) {
+	const row = quote.value?.body.rows[index];
+	if (!row || reviewSnapshot.value?.quoteId !== quote.value?.id) return false;
+	let modified = rowModifications.get(row);
+	if (!modified) {
+		modified = computed(() => reviewRowModified(reviewSnapshot.value, row));
+		rowModifications.set(row, modified);
+	}
+	return modified.value;
+}
+function previousPendingReason(index: number) {
+	const result = rowReviewResult(index);
+	return [result?.status === 'pending' ? result.reason : '', result?.installation_status === 'pending' ? result.installation_reason : '']
+		.filter(Boolean).join('；');
+}
+/** 连续编辑时保留其他行的待处理依据；实际修改行直到成功试算后才退出待处理列表。 */
+function rowAttention(index: number) {
+	const result = rowReviewResult(index);
+	const state = rowAttentionState(
+		quote.value?.body.rows[index],
+		result,
+		canShowReviewReason() || !!result,
+		quote.value?.body.ai_review_status,
+		!!quote.value?.body.installation_options?.included
+	);
+	return state === 'none' && rowModified(index) ? 'review' : state;
+}
 function rowNeedsAttention(index: number) {
-	const result = quote.value?.result?.rows[index];
-	return result?.status === 'pending' || result?.installation_status === 'pending' || !!rowReviewReason(index);
+	return rowAttention(index) !== 'none';
 }
-/** 排除行弱化显示，待确认材料/安装或有核验提醒的行高亮，辅助逐行处理问题。 */
-function rowClass({ row, rowIndex }: { row: QuoteRow; rowIndex: number }) {
-	return row.excluded ? 'excluded-row' : rowNeedsAttention(rowIndex) ? 'pending-row' : '';
+/** 表格筛选只改变可见行，计算、原表定位和输入编辑均继续使用原清单位置。 */
+function originalIndex(row: QuoteRow) {
+	return rowIndices.value.get(row) ?? -1;
+}
+function productRowKey(row: QuoteRow) {
+	return row.row_id || `legacy-${originalIndex(row)}`;
+}
+function visibleRowNumber(index: number) {
+	return originalIndex(visibleProductRows.value[index]) + 1;
+}
+/** 导入核验提醒显示黄色，试算后的材料或安装待确认显示红色，未试算行不高亮。 */
+function rowClass({ row }: { row: QuoteRow }) {
+	if (row.excluded) return 'excluded-row';
+	const state = rowAttention(originalIndex(row));
+	return state === 'pending' ? 'pending-row' : state === 'review' ? 'review-needed-row' : '';
 }
 /** 记录选中行的索引并打开参数/明细抽屉，使输入、来源和上次计算结果在同一行对应。 */
 function openRow(row: QuoteRow) {
-	selected.value = quote.value!.body.rows.indexOf(row);
+	selected.value = originalIndex(row);
 	drawer.value = true;
 }
 /** 按当前行已有规则和生效共用系列打开配置；本行私有规则与共用引用分别传入，便于保持引用关系。 */
 function openProductRule(row: QuoteRow) {
-	selected.value = quote.value!.body.rows.indexOf(row);
+	selected.value = originalIndex(row);
 	const body = selectedRuleBody.value;
 	const family =
 		body && !row.product_rule
@@ -1101,6 +1386,7 @@ async function applyProductRule(definition: { body: ProductRuleBody; family?: st
 		row.quantity = definition.row.quantity;
 		row.engineering_quantity = definition.row.engineering_quantity;
 		row.attributes = definition.row.attributes;
+		row.installation = definition.row.installation;
 	}
 	if (family) {
 		row.product_rule_family = family;
@@ -1120,7 +1406,7 @@ async function applyProductRule(definition: { body: ProductRuleBody; family?: st
 	if (!saved && quote.value?.id === quoteId && quote.value.body.rows[index]) Object.assign(definition.row, quote.value.body.rows[index]);
 	if (saved) {
 		try {
-			productRules.value = await quoteApi.productRules();
+			await refreshProductRules();
 		} catch (error) {
 			report(error);
 		}
@@ -1174,20 +1460,65 @@ async function navigate(id: string) {
 }
 /** 读取服务端当前版本，补齐历史安装字段，再建立正文基线并关闭旧行抽屉，保证后续保存使用最新 revision。 */
 async function loadQuote(id: string) {
-	const value = await quoteApi.detail(id);
+	applyQuote(await quoteApi.detail(id));
+}
+/** 详情读取、保存和试算均应用同一份服务端权威正文，保持行 ID、核验状态和修改基线一致。 */
+function applyQuote(value: Quote) {
 	prepareInstallation(value.body);
+	value.body.rows.forEach((row) => { row.installation_only ??= false; });
+	reviewSnapshot.value = updateReviewSnapshot(reviewSnapshot.value, value);
 	quote.value = value;
-	baseline.value = JSON.stringify(value.body);
+	resetBaseline();
 	drawer.value = false;
+}
+async function applyMutation(target: Quote, response: QuoteMutationResult | undefined, calculated: boolean) {
+	if (quote.value !== target) return false;
+	if (response?.body && response.state && typeof response.result_stale === 'boolean' && (!calculated || response.result)) {
+		applyQuote({ ...target, ...response, body: response.body, state: response.state, result: calculated ? response.result! : null, result_stale: response.result_stale });
+	} else {
+		// 兼容尚未更新的后端；仅此时补读详情。保存成功即清除旧结果，详情失败也不能沿用旧价格。
+		if (response) target.revision = response.revision;
+		if (!calculated) target.result = null;
+		const value = await quoteApi.detail(target.id);
+		if (quote.value !== target) return false;
+		applyQuote(value);
+	}
+	return true;
+}
+/** 保留上次可见规则；只有最新请求可更新草稿状态，读取失败不能伪装成空列表。 */
+async function refreshProductRules() {
+	const request = ++productRulesRequest;
+	productRulesLoadState.value = 'loading';
+	try {
+		const rules = await quoteApi.productRules();
+		if (request !== productRulesRequest) return;
+		productRules.value = rules;
+		productRulesLoadState.value = 'ready';
+	} catch (error) {
+		if (request !== productRulesRequest) return;
+		productRulesLoadState.value = 'error';
+		throw error;
+	}
+}
+/** 规则操作成功后刷新两个入口；校验仍是草稿，点击管理按钮不会清除提醒。 */
+async function productRulesChanged() {
+	try {
+		await refreshProductRules();
+	} catch (error) {
+		report(error);
+	}
 }
 /** 并行加载各类指标和产品规则，再按路由读取报价；没有编号时显示列表入口，失败时显式提示。 */
 async function initialize() {
 	busy.value = true;
 	failed.value = false;
 	try {
-		[catalogs.value, productRules.value] = await Promise.all([quoteApi.resources(), quoteApi.productRules()]);
+		[catalogs.value] = await Promise.all([quoteApi.resources(), refreshProductRules()]);
 		if (route.query.id) await loadQuote(String(route.query.id));
-		else quote.value = undefined;
+		else {
+			quote.value = undefined;
+			reviewSnapshot.value = undefined;
+		}
 	} catch (error) {
 		failed.value = true;
 		report(error);
@@ -1207,9 +1538,9 @@ async function createBlank() {
 		busy.value = false;
 	}
 }
-/** 保存可选地继续试算：先检查 AI 核验与整单运费选择，写入后重新读取行 ID 和修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
+/** 保存可选地继续试算：应用权威正文与修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
 async function save(calculate: boolean) {
-	if (!quote.value) return false;
+	if (!quote.value || saving.value) return false;
 	if (calculate && aiReviewRequired.value) {
 		ElMessage.warning('请先人工核验AI清单');
 		return false;
@@ -1222,21 +1553,20 @@ async function save(calculate: boolean) {
 	busy.value = true;
 	try {
 		const id = quote.value.id;
-		/** 修改正文后重新保存会使旧试算失效；读取服务端数据后再决定是否还能按当前核验状态继续计算。 */
+		/** 修改正文后重新保存会使旧试算失效；按服务端返回的核验状态决定是否继续计算。 */
 		if (dirty.value || quote.value.body.ai_review_status !== 'approved') {
-			const saved = await quoteApi.save(id, quote.value.body, quote.value.revision);
-			quote.value.revision = saved.revision;
-			quote.value.result = null;
-			// 在后续试算可能失败之前，先重新读取行 ID 并更新已保存基线。
-			await loadQuote(id);
+			const target = quote.value;
+			const saved = await quoteApi.save(id, target.body, target.revision);
+			if (!(await applyMutation(target, saved, false))) return false;
 		}
 		if (calculate) {
 			if (aiReviewPending.value) {
 				ElMessage.warning('草稿修改后请重新人工核验，再试算');
 				return false;
 			}
-			await quoteApi.calculate(id, quote.value.revision);
-			await loadQuote(id);
+			const target = quote.value;
+			const result = await quoteApi.calculate(id, target.revision);
+			if (!(await applyMutation(target, result, true))) return false;
 		}
 		ElMessage.success(calculate ? (quote.value.result?.formal_ready ? '试算完成，可以生成正式报价' : '试算完成，请核对待确认项') : '草稿已保存');
 		return true;
@@ -1391,16 +1721,18 @@ async function revise() {
 		await confirm('创建新的报价版本？未保存的修改不会带入新版本。');
 		const result = await quoteApi.action(quote.value.id, quote.value.revision, 'revise');
 		if (result.id) {
-			baseline.value = JSON.stringify(quote.value.body);
+			resetBaseline();
 			await navigate(result.id);
 		}
 	} catch (error) {
 		report(error);
 	}
 }
-/** 正式导出确认后锁定当前版本；草稿校对版保留待确认标记并可编辑。生成文件后重新读取报价状态与导出记录，再下载对应文件。 */
+/** 生成后直接下载文件并更新轻量版本摘要，避免重新读取整份报价造成下载等待或失败。 */
 async function exportQuote(kind: string) {
-	if (!quote.value) return;
+	if (!quote.value || exporting.value) return;
+	const target = quote.value;
+	exporting.value = kind;
 	try {
 		if (kind === 'formal') await confirm('生成正式报价后，此版本将锁定。请确认客户、项目、计价条件与金额已核对。');
 		else {
@@ -1412,12 +1744,17 @@ async function exportQuote(kind: string) {
 			);
 		}
 		busy.value = true;
-		const file = await quoteApi.export(quote.value.id, quote.value.revision, kind);
-		await loadQuote(quote.value.id);
+		const file = await quoteApi.export(target.id, target.revision, kind);
+		if (quote.value === target) {
+			target.state = file.quote_state;
+			target.revision = file.quote_revision;
+			if (!target.exports.some((item) => item.id === file.id)) target.exports.unshift(file);
+		}
 		await quoteApi.download(file.id, file.filename);
 	} catch (error) {
 		report(error);
 	} finally {
+		exporting.value = '';
 		busy.value = false;
 	}
 }
@@ -1437,6 +1774,7 @@ async function previewReviewFile(event: Event) {
 	busy.value = true;
 	try {
 		reviewPreview.value = await quoteApi.previewReviewImport(quote.value.id, quote.value.revision, file);
+		restoreScopeRowIds.value = [];
 		reviewDialog.value = true;
 	} catch (error) {
 		report(error);
@@ -1447,10 +1785,10 @@ async function previewReviewFile(event: Event) {
 
 /** 把确认的人工价格回导应用到当前修订版，读取重新汇总的材料、安装和整单结果，并提示是否仍有待确认项。 */
 async function applyReviewFile() {
-	if (!quote.value || !reviewPreview.value?.change_count) return;
+	if (!quote.value || !reviewPreview.value?.change_count || !allScopeRestorationsConfirmed.value) return;
 	busy.value = true;
 	try {
-		await quoteApi.applyReviewImport(quote.value.id, quote.value.revision, reviewPreview.value.import_id);
+		await quoteApi.applyReviewImport(quote.value.id, quote.value.revision, reviewPreview.value.import_id, restoreScopeRowIds.value);
 		reviewDialog.value = false;
 		await loadQuote(quote.value.id);
 		ElMessage.success(quote.value.result?.formal_ready ? '人工报价已回导，可以生成正式报价' : '人工报价已回导，仍有项目需要确认');
@@ -1521,6 +1859,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
 	display: block;
 	width: 100%;
 	color: var(--el-text-color-secondary);
+}
+.material-status-cell .review-reminder {
+	color: var(--el-color-warning);
+}
+:deep(.q-table .review-needed-row) {
+	--el-table-tr-bg-color: var(--el-color-warning-light-9);
+}
+:deep(.q-table .review-needed-row:hover > td.el-table__cell) {
+	background-color: var(--el-color-warning-light-8) !important;
 }
 .drawer-installation {
 	margin: 22px 0;

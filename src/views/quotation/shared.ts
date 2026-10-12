@@ -1,6 +1,7 @@
 /** 报价页面共享的展示、交互和风管字段配置；这里只整理输入与显示，价格由后端报价引擎计算。 */
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { QuoteRow } from '/@/types/quotation';
+import { generateUUID } from '/@/utils/other';
 
 /** 统一显示报价单与指标版本状态，便于工作台、历史记录和指标管理使用相同中文名称。 */
 export const stateLabels: Record<string, string> = { draft: '草稿', final: '已定稿', archived: '已归档', published: '已发布', retired: '已停用' };
@@ -23,6 +24,7 @@ export async function confirm(message: string) {
 /** 创建手工输入的空白风管行，工程量和设备数量分别保留。自动识别工作台会再清空默认类别和单位供报价员确认。 */
 export function blankRow(): QuoteRow {
 	return {
+		row_id: generateUUID(),
 		name: '',
 		spec: '',
 		engineering_quantity: '',
@@ -33,6 +35,7 @@ export function blankRow(): QuoteRow {
 		attributes: {},
 		excluded: false,
 		exclude_reason: '',
+		installation_only: false,
 		source_issue_confirmed: false,
 	};
 }

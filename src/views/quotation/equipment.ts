@@ -1,3 +1,5 @@
+import type { EquipmentMechanismDetail } from '/@/types/quotation';
+
 /** 设备计价类型及中文字段字典，供设备指标维护、报价行参数和产品规则编辑共用；编码对应后端已有成本模型。 */
 export const equipmentKinds: Record<string, string> = {
 	fan: '风机',
@@ -23,18 +25,27 @@ export const equipmentRates: Record<string, string> = {
 	tax_factor: '含税系数',
 	round_factor: '圆形设备系数',
 	valve_steel: '阀体材料吨价（元/吨）',
+	fire_150_steel: '150°防火阀旧单价（材质未确认，仅历史参考，元/吨）',
+	fire_150_201_steel: '150°防火阀201不锈钢专用吨价（元/吨）',
+	fire_150_304_steel: '150°防火阀304不锈钢专用吨价（元/吨）',
 	density: '材料密度换算',
 	split_width: '拆分宽度界限（mm）',
 	split_height: '拆分高度界限（mm）',
+	pressure_supply_split_height: '正压送风口大尺寸整体高度界限（mm）',
+	pressure_supply_mechanism_width: '正压送风口加机构宽度界限（mm）',
+	pressure_supply_panel_rate: '正压送风口面板成本（元/㎡）',
+	pressure_supply_mechanism: '正压送风口每套基础机构成本（元）',
 	splice_width: '拼接收费宽度界限（mm）',
 	splice_height: '拼接收费高度界限（mm）',
 	fire_splice: '防火 / 电动阀单边超限拼接费',
 	manual_splice: '手动调节阀单边超限拼接费',
 	check_splice: '止回阀拼接费（固定为 0）',
-	remote_extra: '远控机构附加成本',
+	remote_extra: '其他产品旧远控附加成本（本次三类不使用）',
+	valve_remote_extra: '防火阀 / 板式 / 正压远控附加（40元/机构）',
+	fire_auto_extra: '防火阀全自动附加（150元/机构）',
 	near_control: '板式排烟口近控机构成本',
-	remote_control: '板式排烟口远控基础机构成本',
-	auto_control: '板式排烟口自动机构成本',
+	remote_control: '旧板式远控基础成本（本次规则不使用）',
+	auto_control: '旧板式自动机构成本（板式不再支持全自动）',
 	panel_rate: '面板成本（元/㎡）',
 	panel_edge: '面板尺寸增加（mm）',
 	silencer_rate: '消声器成本（元/㎡）',
@@ -53,6 +64,7 @@ export const equipmentComponents: Record<string, string> = {
 	blade: '叶片',
 	labor: '人工',
 	link: '连杆',
+	pressure_supply_link: '正压送风口连杆',
 	corners: '角码',
 	shaft: '圆钢',
 	consumables: '辅材',
@@ -65,7 +77,7 @@ export const equipmentComponents: Record<string, string> = {
 	plate_blade: '板式叶片',
 	plate_consumables: '板式辅材',
 	plate_brace: '板式趴方',
-	mechanism: '机构（含适用远控附加）',
+	mechanism: '机构（基础成本 + 适用控制方式附加）',
 	splice: '拼接',
 	panel: '面板',
 };
@@ -134,7 +146,20 @@ export const equipmentFields: EquipmentField[] = [
 	{ key: 'diameter', label: '圆形直径（mm）' },
 	{ key: 'thickness', label: '板厚（mm）' },
 	{ key: 'blade_thickness', label: '叶片厚度（mm）' },
+	{
+		key: 'valve_material_variant',
+		label: '防火阀规格',
+		choices: [
+			['standard', '普通防火阀'],
+			['fire_150', '150°防火阀（201默认 / 304明确指定）'],
+		],
+	},
 	{ key: 'model', label: '需求型号' },
+	{
+		key: 'purchased_type',
+		label: '外购换气扇类型',
+		choices: [['plastic', '塑料'], ['full_metal', '全金属'], ['semi_metal', '半金属'], ['metal', '金属（未细分）']],
+	},
 	{ key: 'size', label: '需求机号' },
 	{ key: 'power', label: '需求功率（kW，双速用 /）' },
 	{ key: 'airflow', label: '风量（m³/h）' },
@@ -306,6 +331,7 @@ const fieldsByCategory: Record<string, string[]> = {
 		'diameter',
 		'thickness',
 		'blade_thickness',
+		'valve_material_variant',
 		'material',
 		'shape',
 		'control',
@@ -340,21 +366,85 @@ const fieldsByCategory: Record<string, string[]> = {
 		'area_per_unit',
 		'area_cost',
 	],
-	外购设备: ['equipment_kind', 'model'],
-	其他材料: ['equipment_kind', 'model'],
+	外购设备: ['equipment_kind', 'model', 'purchased_type'],
+	其他材料: ['equipment_kind', 'model', 'purchased_type'],
 };
 
 /** 仅显示选定产品类别所需的参数；隐藏字段的已有值仍保留在 attributes 中。 */
 /** 按产品类别和具体成本算法选择需要填写的参数，并限制可选计算类型。消声弯头使用人工面积，其他消声设备使用尺寸；隐藏字段仍留在 attributes 中。 */
-export function equipmentFieldsFor(category: string, kind = ''): EquipmentField[] {
+export function equipmentFieldsFor(category: string, kind = '', productName = '', attributes: Record<string, string> = {}): EquipmentField[] {
 	let keys = fieldsByCategory[category] || ['equipment_kind'];
+	const fire150 =
+		category === '风阀' &&
+		(['fire', 'electric_fire'].includes(kind) || (!kind && (attributes.valve_material_variant === 'fire_150' || /防火(?:调节)?阀/.test(productName)))) &&
+		(attributes.valve_material_variant === 'fire_150' || /(?<![0-9])150\s*(?:℃|°\s*C?|度|C\b)/i.test(productName));
+	const controlChoices = equipmentControlChoices(kind, productName);
+	if (controlChoices) keys = keys.filter((key) => key !== 'remote');
 	if (category === '消声设备' && kind === 'elbow') keys = ['equipment_kind', 'area_per_unit'];
 	else if (category === '消声设备' && ['silencer', 'plenum'].includes(kind)) keys = keys.filter((key) => key !== 'area_per_unit');
+	if (kind && !['fire', 'electric_fire'].includes(kind)) keys = keys.filter((key) => key !== 'valve_material_variant');
 	const allowedKinds = kindsByCategory[category];
 	return keys.flatMap((key) => {
 		const field = equipmentFieldByKey.get(key);
 		if (!field) return [];
+		if (key === 'material' && fire150)
+			return [
+				{
+					...field,
+					label: '150°防火阀材质',
+					choices: [
+						['stainless_201', '201不锈钢（默认）'],
+						['stainless_304', '304不锈钢（明确指定）'],
+					],
+				},
+			];
+		if (key === 'control' && controlChoices)
+			return [{ ...field, label: kind === 'plate_smoke' ? '机构方式（板式不支持全自动）' : '机构方式', choices: controlChoices }];
 		if (key !== 'equipment_kind' || !allowedKinds) return [field];
 		return [{ ...field, choices: allowedKinds.map((value) => [value, equipmentKinds[value]]) }];
 	});
+}
+
+/** 只约束本次确认的产品；正压同类名称与后端保持一致，不扩展普通多叶阀。 */
+export function equipmentControlChoices(kind: string, productName = ''): string[][] | undefined {
+	if (!kind) kind = /板式排烟/.test(productName) ? 'plate_smoke' : /防火(?:调节)?阀/.test(productName) ? 'fire' : 'multi_leaf';
+	const fire = ['fire', 'electric_fire'].includes(kind);
+	const plate = kind === 'plate_smoke';
+	const pressure =
+		kind === 'multi_leaf' &&
+		!productName.includes('板式排烟') &&
+		['正压送风口', '正压送风阀', '多叶排烟', '电动百叶风口', '多叶加压送风口', '加压送风口', '多叶送风口', '组合送风口'].some((name) =>
+			productName.includes(name)
+		);
+	if (!fire && !plate && !pressure) return;
+	const choices = [
+		['near', plate ? '近控基础机构（默认）' : '基础机构（默认）'],
+		['remote', '远控（基础 + 40元/机构）'],
+	];
+	if (fire) choices.push(['auto', '全自动（基础 + 150元/机构）']);
+	return choices;
+}
+
+/** 人工改选机构时同步旧远控字段，单个机构选择不会叠加远控与全自动。 */
+export function applyEquipmentParameter(attributes: Record<string, string>, key: string, value: string, kind = '', productName = '') {
+	attributes[key] = value;
+	if (key !== 'control' || !equipmentControlChoices(kind || attributes.equipment_kind, productName)) return;
+	if (!value) delete attributes.remote;
+	else attributes.remote = value === 'remote' ? 'true' : 'false';
+}
+
+/** 仅用于展示旧远控字段；明确的单选机构值始终优先，不回写来源数据。 */
+export function equipmentParameterValue(attributes: Record<string, string>, key: string, kind = '', productName = ''): string {
+	if (key === 'control' && !attributes.control && equipmentControlChoices(kind || attributes.equipment_kind, productName)) {
+		if (attributes.remote === 'true') return 'remote';
+		if (attributes.remote === 'false') return 'near';
+	}
+	return attributes[key] || '';
+}
+
+/** 保留后端保存的每件机构数和成本公式，旧结果无数据时不补算。 */
+export function mechanismCostExplanation(detail?: EquipmentMechanismDetail): string {
+	const count = detail?.mechanism_count == null ? '' : String(detail.mechanism_count).trim();
+	const formula = detail?.component_formulas?.mechanism?.trim();
+	return [count ? `每件机构数 N = ${count}` : '', formula ? `机构成本（每件）：${formula} 元` : ''].filter(Boolean).join('；');
 }

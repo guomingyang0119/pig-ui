@@ -1,5 +1,19 @@
 /** 报价前后端交换的数据契约；金额和数值条件以字符串保存，空金额表示尚未确认，避免前端浮点数参与正式计价。 */
 export type Money = string | null;
+/** AI整理检查点只返回进度；原资料及批次内容保存在服务端，不能由客户端改写。 */
+export interface AiImportJob {
+	job_id: string;
+	state: 'ready' | 'processing' | 'failed' | 'completed' | 'cancelled';
+	completed_batches: number;
+	total_batches: number;
+	current_label: string;
+	error_message: string;
+	lease_until?: number;
+	id?: string;
+	row_count?: number;
+	product_row_count?: number;
+	special_row_count?: number;
+}
 /** 全新产品算法的参数：input 使用本行值或通用默认值，catalog_rate 通过 rate_key 引用生效成本指标。 */
 export interface ProductRuleParameter {
 	key: string;
@@ -47,8 +61,49 @@ export interface ProductRuleBody {
 	description?: string;
 	formula?: string;
 	template_key?: string;
+	/** 安装项目对应关系；指标项目动态取价，手填单价必须限定适用地区，不保存本单数量与施工条件。 */
+	installation?: ProductRuleInstallation;
+	/** 已有风机配置补价，沿用风机选型与结算；整台成本已包含适用防爆成本，附阀及安装单独计算。 */
+	fan_price?: FanPriceSupplement;
+	/** 未收录客户型号与已确认本体公式的对应关系；按当前材料、电机和有效指标重新计算。 */
+	fan_cost?: FanCostTemplate;
 	effective_from?: string;
 	effective_to?: string;
+}
+/** 一个产品报价单位对应的安装用量，表达式只引用尺寸，不引用整行数量或生产损耗。 */
+export interface ProductRuleInstallationItem {
+	name?: string;
+	project_id?: string;
+	unit_price?: string;
+	unit?: string;
+	quantity_expression?: string;
+	region?: string;
+	note?: string;
+}
+export interface ProductRuleInstallation {
+	mode: 'whole' | 'split';
+	items: ProductRuleInstallationItem[];
+}
+/** 安装配置和真实计价上下文；推荐项目须人工确认，项目来源价保持动态读取。 */
+export interface ProductRuleInstallationInput {
+	included: boolean;
+	region: string;
+	status: 'not_applicable' | 'ready' | 'pending';
+	source: 'row' | 'rule' | 'inherited' | 'none';
+	mode: 'whole' | 'split';
+	profile?: ProductRuleInstallation;
+	projects: InstallationProject[];
+	recommendations: { name: string; project_id: string; unit: string; reason: string }[];
+	items: {
+		entry: ProductRuleInstallationItem | InstallationEntry;
+		effective?: InstallationLine;
+		origins: Record<string, 'row' | 'rule' | 'inherited' | 'catalog'>;
+		required_fields: string[];
+		needs_confirmation: boolean;
+		reason: string;
+	}[];
+	reason: string;
+	catalog?: { id: string; version: number; source: string };
 }
 /** 单行规则推荐记录，保留来源、版本、评分和推荐理由，供人工判断而非直接应用。 */
 export interface ProductRuleRecommendation {
@@ -62,6 +117,7 @@ export interface ProductRuleRecommendation {
 }
 /** 推荐接口的模板、候选和发布权限，同时返回允许引用的成本指标列表。 */
 export interface ProductRuleRecommendations {
+	installation_input?: ProductRuleInstallationInput;
 	templates: ProductRuleBody[];
 	recommendations: ProductRuleRecommendation[];
 	can_publish: boolean;
@@ -72,7 +128,7 @@ export interface ProductRuleRecommendations {
 /** 当前行或组成项实际采用的参数及来源，仅用于展示，不将继承值写入常用规则。 */
 export interface EffectiveProductParameters {
 	attributes: Record<string, string>;
-	origins: Record<string, 'row' | 'recognized' | 'default' | 'inherited'>;
+	origins: Record<string, 'row' | 'recognized' | 'default' | 'inherited' | 'order' | 'engine'>;
 	required_fields: string[];
 }
 export interface ProductInputGuidance extends EffectiveProductParameters {
@@ -87,8 +143,54 @@ export interface FanInputGuidance {
 	required_fields: string[];
 	issue_kind: 'parameters' | 'selection' | 'cost' | 'conflict' | 'ready';
 	reason: string;
+	price_candidates?: FanPriceCandidate[];
+	/** 系统已选工况及电机资料，仅供核对，不反填为客户需求。 */
+	selected_parameters?: Record<string, string>;
+	cost_template_mode?: boolean;
+	cost_input?: {
+		available: boolean;
+		templates: { family: string; label: string; sizes: string[] }[];
+		recommended_family: string;
+		model: string;
+		size: string;
+		motors: FanCostMotor[];
+	};
+}
+export interface FanCostMotor {
+	model: string;
+	powers: string[];
+	poles: string[];
+	cost: string;
+}
+export interface FanCostTemplate {
+	family: string;
+	model: string;
+	size?: string;
+	dual_speed?: boolean;
+	/** 仅在已有电机缺价时保存的核实成本，严格限制到此电机及功率、极数配置。 */
+	motor?: FanCostMotor;
+}
+export interface FanPriceSupplement {
+	model: string;
+	size: string;
+	powers: string[];
+	poles: string[];
+	material: string;
+	thickness: string;
+	motor_model: string;
+	explosion: boolean;
+	unit_cost?: string;
+	body_cost?: string;
+	motor_cost?: string;
+}
+export interface FanPriceCandidate {
+	id: string;
+	price: FanPriceSupplement;
+	missing_costs: ('body_cost' | 'motor_cost')[];
+	reasons: string[];
 }
 /** 原始客户产品行及人工补充参数；风管工程量与设备数量分别保存，来源定位/原文用于核验，排除行必须记录原因。 */
+export type QuoteScope = 'supply' | 'excluded' | 'installation_only';
 export interface QuoteRow {
 	/** 本单规则正文与 product_rule_family 共用引用二选一；客户原始名称不因别名转换而改写。 */
 	product_rule?: ProductRuleBody;
@@ -105,8 +207,16 @@ export interface QuoteRow {
 	category: string;
 	remark: string;
 	attributes: Record<string, string>;
+	/** 服务端根据试运行开关和阈值生成的AI识别核对提示；评分是模型自评，不代表准确率。 */
+	ai_confidence_reason?: string;
+	ai_confidence_score?: string | number;
+	ai_confidence_threshold?: number;
+	/** 服务端汇总的系统纠正及其依据，只用于审计展示，不表示尚需人工核对。 */
+	ai_correction_reason?: string;
 	excluded: boolean;
 	exclude_reason: string;
+	/** 仅报价安装，默认 false；与 excluded 互斥，整单必须包含安装。 */
+	installation_only?: boolean;
 	/** 原表数据异常必须人工确认，original 与 source_row/source_sheet 用于回到原客户资料核对。 */
 	source_issue_confirmed: boolean;
 	source_issue?: boolean;
@@ -158,26 +268,33 @@ export interface QuoteBody {
 	source_sheets?: { name: string; status: 'imported' | 'empty' | 'excluded'; row_count: number; exclude_reason?: string }[];
 	source_special_rows?: { source_sheet?: string; source_row: number; kind: string; quantity?: string; original?: { cells: string[] } }[];
 }
-/** 后端逐行计价结果，pending/priced/excluded 分别表示待确认/已报价/已排除；材料与安装状态独立，trace 和 detail 供内部核对。 */
+/** 已保存的每件产品机构成本依据；仅展示，不根据当前行参数重新计算。 */
+export interface EquipmentMechanismDetail {
+	mechanism_count?: number | string;
+	component_formulas?: Record<string, string>;
+}
+/** 后端逐行计价结果，pending/priced/excluded/installation_only 分别表示待确认/已报价/不报价/仅安装；材料与安装状态独立。 */
 export interface RowResult {
+	installation_input?: ProductRuleInstallationInput;
+	installation_detail?: InstallationLine & { children?: InstallationLine[] };
 	fan_input?: FanInputGuidance;
 	parameter_input?: ProductInputGuidance;
 	product_rule?: { id?: string; family?: string; version?: number; body?: ProductRuleBody; scope?: string };
 	product_rule_issue?: string;
 	pricing_mode?: string;
 	candidates?: { id: string; body: { name: string; attributes: FanPoint } }[];
-	detail?: {
+	detail?: EquipmentMechanismDetail & {
 		selected_fan?: FanPoint;
 		selection_note?: string;
 		components?:
 			| Record<string, string>
-			| { name: string; source: string; quantity: string; effective_quantity?: string; unit_cost: string; amount: string }[];
+			| { name: string; source: string; quantity: string; effective_quantity?: string; unit_cost: string; amount: string; detail?: EquipmentMechanismDetail }[];
 		parameters?: { key: string; label: string; unit: string; value: Money; source: string }[];
 		formula_costs?: { name: string; expression: string; amount: string }[];
 		[key: string]: unknown;
 	};
 	/** 尚未确认的单价与金额保持 null，不能作为零价参与最终正式报价。 */
-	status: 'pending' | 'priced' | 'excluded';
+	status: 'pending' | 'priced' | 'excluded' | 'installation_only';
 	reason: string;
 	unit_price: Money;
 	amount: Money;
@@ -235,6 +352,9 @@ export interface ReviewImportChange {
 
 /** 回导预览的完整可见产品行，保留原字段值、变更列表、派生字段和待确认状态，便于与 Excel 逐行对照。 */
 export interface ReviewImportRow {
+	scope?: 'quoted' | 'excluded' | 'installation_only';
+	scope_restore_required?: boolean;
+	candidate_values?: Record<string, string>;
 	visible_row: number;
 	sequence: number;
 	name: string;
@@ -257,6 +377,8 @@ export interface ReviewImportRow {
 
 /** 人工价格回导的预览汇总，column_count 区分不含安装 10 列与含安装 12 列，导入编号用于确认应用。 */
 export interface ReviewImportPreview {
+	/** 填价触发的恢复供货范围候选，必须由用户逐项明确确认。 */
+	scope_restorations?: { source_row_id: string; name: string; previous_scope: 'excluded' | 'installation_only'; visible_row?: number }[];
 	import_id: string;
 	filename: string;
 	line_count: number;
@@ -336,6 +458,13 @@ export interface QuoteSummary {
 	pending_count: number;
 	export_count: number;
 	updated_at: string;
+}
+/** 报价记录分页结果；页码由服务端校正，总数只统计当前账号及筛选范围。 */
+export interface QuotePage {
+	records: QuoteSummary[];
+	total: number;
+	page: number;
+	size: number;
 }
 /** 付款方案编码、安装口径和系数；整单安装状态决定可选方案，系数由后端在对应阶段应用。 */
 export interface PaymentTerm {
@@ -445,6 +574,9 @@ export interface InstallationCatalogBody {
 }
 /** 逐项安装结果，包含人工/辅材、税费、取整及待确认原因，与产品行和独立安装项目顺序对应。 */
 export interface InstallationLine {
+	project_id?: string | null;
+	power?: Money;
+	product_state?: string;
 	name: string;
 	status: string;
 	reason: string;
@@ -525,6 +657,20 @@ export interface EquipmentPrice {
 	id: string;
 	name?: string;
 	model?: string;
+	product_type?: string;
+	legacy_ids?: string[];
+	price_basis?: 'cost' | 'sale';
+	sale_price?: string;
+	source_batch?: string;
+	source_taxed_price?: string;
+	source_tax_divisor?: string;
+	specification?: string;
+	airflow?: string;
+	pressure?: string;
+	power?: string;
+	voltage?: string;
+	frequency?: string;
+	duct_diameter?: string;
 	material?: string;
 	thickness?: string;
 	ton_price?: string;

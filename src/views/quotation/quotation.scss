@@ -105,6 +105,10 @@
 	}
 	.q-table .excluded-row {
 		color: var(--el-text-color-placeholder);
+		--el-table-tr-bg-color: var(--el-fill-color-light);
+	}
+	.q-table .excluded-row .el-input__inner {
+		color: var(--el-text-color-placeholder);
 	}
 	.q-number {
 		font-variant-numeric: tabular-nums;

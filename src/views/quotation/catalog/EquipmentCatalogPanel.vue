@@ -62,9 +62,14 @@
 			</el-form>
 			<el-tabs v-model="tab">
 				<el-tab-pane label="供货价格与边界" name="rates">
+					<p class="q-muted">150°防火阀默认使用201不锈钢，明确要求304时使用304；两项专用吨价独立维护，未确认时留空。</p>
 					<el-form :disabled="!editable" label-position="top" class="q-grid" @submit.prevent>
-						<el-form-item v-for="(_, key) in editing.body.rates" :key="key" :label="equipmentRates[key] || key"
-							><el-input v-model="editing.body.rates[key]" :readonly="key === 'check_splice'"
+						<el-form-item v-for="key in rateKeys" :key="key" :label="equipmentRates[key] || key"
+							><el-input
+								v-model="editing.body.rates[key]"
+								:readonly="key === 'check_splice'"
+								:aria-label="equipmentRates[key] || key"
+								:placeholder="fire150PriceKeys.includes(key) ? '待确认，请填写专用吨价' : ''"
 						/></el-form-item>
 					</el-form>
 				</el-tab-pane>
@@ -86,6 +91,11 @@
 							:name="group.key"
 							:title="group.label + ' · ' + editing.body[group.key].length + ' 条'"
 						>
+							<div v-if="group.key === 'purchased'" class="q-section-head">
+								<p class="q-muted">换气扇表为对客含税售价，已除以 1.1 保存为不含税售价，不再加毛利；仍按本单税费、运费和付款条件报价。</p>
+								<el-button v-if="editable" @click="supplementVentilators">补入换气扇价格表</el-button>
+							</div>
+							<p v-if="group.key === 'purchased'" class="q-muted">换气扇未指定材质时优先选塑料；塑料不满足时，只有全金属或半金属一种符合则自动选型，两种都符合才人工选择。明确指定材质时不自动替换。有型号按型号匹配；无型号时风量须达标，有功率再选最接近的合格功率档位，否则选最接近的合格风量档位。风压不参与选型。</p>
 							<el-table :data="editing.body[group.key]" max-height="480" class="q-table">
 								<el-table-column label="材质 / 型号" min-width="200"
 									><template #default="{ row }"
@@ -97,9 +107,29 @@
 										row.name || (row.powers ? [row.powers.join('/') + ' kW', row.poles?.join('/') + ' 极'].join(' · ') : '板材')
 									}}</template></el-table-column
 								>
-								<el-table-column :label="group.key === 'materials' ? '吨价（元/吨）' : '不含税成本（元）'" width="170"
-									><template #default="{ row }"><el-input v-model="row[group.price]" :disabled="!editable" /></template
+								<el-table-column v-if="group.key === 'purchased'" label="价格口径" width="180">
+									<template #default="{ row }"
+										>{{ row.price_basis === 'sale' ? '不含税售价（不再加毛利）' : '不含税采购成本' }} / {{ row.unit }}</template
+									>
+								</el-table-column>
+								<el-table-column
+									:label="group.key === 'materials' ? '吨价（元/吨）' : group.key === 'purchased' ? '不含税单价（元）' : '不含税成本（元）'"
+									width="190"
+									><template #default="{ row }"
+										><el-input
+											v-model="row[group.key === 'purchased' && row.price_basis === 'sale' ? 'sale_price' : group.price]"
+											:disabled="!editable" /></template
 								></el-table-column>
+								<el-table-column v-if="group.key === 'purchased'" label="风量（m³/h）" min-width="155">
+									<template #default="{ row }"><el-input v-model="row.airflow" :disabled="!editable" placeholder="待补充" /></template>
+								</el-table-column>
+								<el-table-column v-if="group.key === 'purchased'" label="风压（Pa，仅参考）" min-width="170">
+									<template #default="{ row }"><el-input v-model="row.pressure" :disabled="!editable" placeholder="不参与选型，可留空" /></template>
+								</el-table-column>
+								<el-table-column v-if="group.key === 'purchased'" label="功率（W）" min-width="140">
+									<template #default="{ row }"><el-input v-model="row.power" :disabled="!editable" placeholder="待补充" /></template>
+								</el-table-column>
+								<el-table-column v-if="group.key === 'purchased'" prop="source_taxed_price" label="源表含税售价" width="140" />
 								<el-table-column prop="source" label="来源单元格" min-width="220" />
 							</el-table>
 						</el-collapse-item>
@@ -121,6 +151,9 @@
 					<EquipmentParameters :catalog="editing.body" :editable="editable" @pending-change="pendingParameterChange = $event" />
 				</el-tab-pane>
 				<el-tab-pane label="来源记录" name="sources">
+					<p v-if="editing.body.rates.fire_150_steel" class="q-muted">
+						旧150°防火阀材料吨价：{{ editing.body.rates.fire_150_steel }}元/吨（材质未确认，仅供历史参考，不参与报价）。
+					</p>
 					<el-table :data="editing.body.source_files" class="q-table"
 						><el-table-column prop="name" label="源文件" min-width="230" /><el-table-column prop="sha256" label="文件 SHA-256" min-width="420"
 					/></el-table>
@@ -139,6 +172,7 @@ import { quoteApi } from '/@/api/quotation';
 import { confirm, report, stateLabels } from '/@/views/quotation/shared';
 import { equipmentRates, equipmentComponents, equipmentVariables, equipmentFormulaInChinese as chineseFormula } from '/@/views/quotation/equipment';
 import EquipmentParameters from './EquipmentParameters.vue';
+import { mergeVentilatorPrices } from './purchasedPrices';
 import type { Catalog, EquipmentCatalogBody } from '/@/types/quotation';
 type EquipmentCatalog = Catalog<EquipmentCatalogBody>;
 /** 设备指标版本列表与 editing 编辑副本分开保存；baseline 用于发现未保存修改，避免直接污染列表或历史版本。 */
@@ -154,6 +188,13 @@ const canManage = computed(() => auth('quote_manage'));
 const editable = computed(() => canManage.value && editing.value?.status === 'draft');
 const snapshot = () => JSON.stringify(editing.value?.body);
 const dirty = computed(() => !!editing.value && (snapshot() !== baseline.value || pendingParameterChange.value));
+const fire150PriceKeys = ['fire_150_201_steel', 'fire_150_304_steel'];
+const rateKeys = computed(() => [
+	...new Set([
+		...Object.keys(editing.value?.body.rates || {}).flatMap((key) => (key === 'fire_150_steel' ? fire150PriceKeys : [key])),
+		...fire150PriceKeys,
+	]),
+]);
 const priceGroups = [
 	{ key: 'materials' as const, label: '不锈钢板材吨价', price: 'ton_price' },
 	{ key: 'motors' as const, label: '电机成本', price: 'cost' },
@@ -195,6 +236,22 @@ async function seed() {
 			setEditing({ id: '', family: '', kind: 'equipment_catalog', version: 1, revision: 0, status: 'draft', body: await quoteApi.equipmentSeed() });
 			baseline.value = '';
 		}
+	} catch (e) {
+		report(e);
+	} finally {
+		busy.value = false;
+	}
+}
+/** 将新价补入当前编辑草稿；保存、校验和发布继续使用现有版本流程。 */
+async function supplementVentilators() {
+	if (!editing.value || !editable.value) return;
+	busy.value = true;
+	try {
+		const merged = mergeVentilatorPrices(editing.value.body, await quoteApi.equipmentSeed());
+		if (!merged.count) throw new Error('当前后端尚未提供这批换气扇价格，请先更新后端');
+		editing.value.body.purchased = merged.purchased;
+		editing.value.body.source_files = merged.source_files;
+		ElMessage.success(`已补入 ${merged.count} 条换气扇不含税售价，请保存、校验并发布指标`);
 	} catch (e) {
 		report(e);
 	} finally {
