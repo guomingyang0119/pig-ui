@@ -35,10 +35,10 @@ export const equipmentRates: Record<string, string> = {
 	pressure_supply_mechanism_width: '正压送风口加机构宽度界限（mm）',
 	pressure_supply_panel_rate: '正压送风口面板成本（元/㎡）',
 	pressure_supply_mechanism: '正压送风口每套基础机构成本（元）',
-	splice_width: '拼接收费宽度界限（mm）',
-	splice_height: '拼接收费高度界限（mm）',
-	fire_splice: '防火 / 电动阀单边超限拼接费',
-	manual_splice: '手动调节阀单边超限拼接费',
+	splice_width: '拼接宽度每段尺寸（mm）',
+	splice_height: '拼接高度每段尺寸（mm）',
+	fire_splice: '防火 / 电动阀每次拼接成本',
+	manual_splice: '手动调节阀每次拼接成本',
 	check_splice: '止回阀拼接费（固定为 0）',
 	remote_extra: '其他产品旧远控附加成本（本次三类不使用）',
 	valve_remote_extra: '防火阀 / 板式 / 正压远控附加（40元/机构）',
@@ -192,7 +192,6 @@ export const equipmentFields: EquipmentField[] = [
 			['round', '圆形'],
 		],
 	},
-	{ key: 'splice_cost', label: '双边超限确认拼接费（成本元）' },
 	{
 		key: 'control',
 		label: '机构方式',
@@ -283,7 +282,6 @@ export const equipmentFields: EquipmentField[] = [
 		],
 	},
 	{ key: 'attached_valve_thickness', label: '附阀板厚（mm）' },
-	{ key: 'attached_valve_splice_cost', label: '附阀确认拼接费（元）' },
 ];
 
 /** 建立参数索引及类别映射，复用同一字段定义生成风机、风阀、风口、消声和外购产品的表单。 */
@@ -322,7 +320,6 @@ const fieldsByCategory: Record<string, string[]> = {
 		'attached_valve_control',
 		'attached_valve_material',
 		'attached_valve_thickness',
-		'attached_valve_splice_cost',
 	],
 	风阀: [
 		'equipment_kind',
@@ -337,7 +334,6 @@ const fieldsByCategory: Record<string, string[]> = {
 		'control',
 		'remote',
 		'mechanism_cost',
-		'splice_cost',
 	],
 	百叶风口: [
 		'equipment_kind',

@@ -684,6 +684,8 @@ export interface EquipmentPrice {
 export interface EquipmentCatalogBody {
 	name: string;
 	source: string;
+	/** 标识后端提供的百叶调价批次，避免旧后端价格被误认为最新价。 */
+	louver_price_batch?: string;
 	effective_from: string;
 	effective_to: string;
 	company_id: string;

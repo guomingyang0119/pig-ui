@@ -62,6 +62,18 @@
 			</el-form>
 			<el-tabs v-model="tab">
 				<el-tab-pane label="供货价格与边界" name="rates">
+					<div class="q-section-head">
+						<h3>百叶风口面积成本</h3>
+						<el-button v-if="editable" @click="supplementLouvers">应用最新百叶成本</el-button>
+					</div>
+					<p class="q-muted">按每平方米材料成本维护，系统结合尺寸计算成本后生成售价。自垂百叶使用自己的价格指标。</p>
+					<el-table :data="basicLouvers" class="q-table" style="margin-bottom: 20px">
+						<el-table-column prop="label" label="风口类型" min-width="180" />
+						<el-table-column label="面积成本（元/㎡）" min-width="180">
+							<template #default="{ row }"><el-input v-model="row.value[0]" :disabled="!editable" :aria-label="row.label + '面积成本（元/㎡）'" inputmode="decimal" /></template>
+						</el-table-column>
+						<el-table-column label="最低成本（元/个）" min-width="170"><template #default="{ row }">{{ row.value[1] }}</template></el-table-column>
+					</el-table>
 					<p class="q-muted">150°防火阀默认使用201不锈钢，明确要求304时使用304；两项专用吨价独立维护，未确认时留空。</p>
 					<el-form :disabled="!editable" label-position="top" class="q-grid" @submit.prevent>
 						<el-form-item v-for="key in rateKeys" :key="key" :label="equipmentRates[key] || key"
@@ -189,6 +201,8 @@ const editable = computed(() => canManage.value && editing.value?.status === 'dr
 const snapshot = () => JSON.stringify(editing.value?.body);
 const dirty = computed(() => !!editing.value && (snapshot() !== baseline.value || pendingParameterChange.value));
 const fire150PriceKeys = ['fire_150_201_steel', 'fire_150_304_steel'];
+const basicLouverTypes = [['single', '单层百叶'], ['double', '双层百叶'], ['rain', '防雨百叶'], ['gravity', '自垂百叶']];
+const basicLouvers = computed(() => basicLouverTypes.map(([key, label]) => ({ key, label, value: editing.value!.body.louvers[key] })));
 const rateKeys = computed(() => [
 	...new Set([
 		...Object.keys(editing.value?.body.rates || {}).flatMap((key) => (key === 'fire_150_steel' ? fire150PriceKeys : [key])),
@@ -252,6 +266,29 @@ async function supplementVentilators() {
 		editing.value.body.purchased = merged.purchased;
 		editing.value.body.source_files = merged.source_files;
 		ElMessage.success(`已补入 ${merged.count} 条换气扇不含税售价，请保存、校验并发布指标`);
+	} catch (e) {
+		report(e);
+	} finally {
+		busy.value = false;
+	}
+}
+/** 将已确认的四种普通百叶面积成本补入当前草稿，仍通过原指标版本流程保存和发布。 */
+async function supplementLouvers() {
+	if (!editing.value || !editable.value || busy.value) return;
+	const target = editing.value;
+	busy.value = true;
+	try {
+		const seed = await quoteApi.equipmentSeed();
+		if (!seed.louver_price_batch) throw new Error('当前后端尚未提供最新百叶成本，请先更新后端');
+		const incoming = basicLouverTypes.map(([key]) => {
+			const rate = seed.louvers[key]?.[0];
+			if (!rate || !Number.isFinite(Number(rate)) || Number(rate) < 0) throw new Error('最新百叶成本指标不完整，请先更新后端');
+			return { key, rate };
+		});
+		if (editing.value !== target) return;
+		for (const { key, rate } of incoming) target.body.louvers[key][0] = rate;
+		target.body.louver_price_batch = seed.louver_price_batch;
+		ElMessage.success('已更新四种百叶面积成本，请保存、校验并发布指标');
 	} catch (e) {
 		report(e);
 	} finally {
