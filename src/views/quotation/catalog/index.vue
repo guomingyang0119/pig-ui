@@ -10,93 +10,133 @@
 		</header>
 		<el-tabs v-model="catalogMode">
 			<el-tab-pane label="风管指标" name="duct">
-				<el-alert
-					title="已发布指标保留原版本。调价请创建新版本，核对后发布；停用最新版本后不会自动回退到旧价格。"
-					type="info"
-					:closable="false"
-					show-icon
-				/>
 				<el-empty v-if="!catalogs.length && !busy" description="尚未初始化指标，请报价负责人导入内置基价草稿并核对发布。" />
-				<el-table v-else :data="catalogs" class="q-table" highlight-current-row @row-click="select" style="margin-top: 20px">
-					<el-table-column label="指标名称" min-width="220"
-						><template #default="{ row }"
-							><el-button link type="primary" @click.stop="select(row)">{{ row.body.name }}</el-button></template
-						></el-table-column
-					>
-					<el-table-column prop="version" label="版本" width="75" />
-					<el-table-column label="状态" width="120"
-						><template #default="{ row }"
-							><el-tag :type="row.status === 'published' ? 'success' : 'info'" effect="plain">{{ labels[row.status] }}</el-tag></template
-						></el-table-column
-					>
-					<el-table-column label="生效时间" min-width="200"
-						><template #default="{ row }">{{ row.body.effective_from }} ～ {{ row.body.effective_to || '长期有效' }}</template></el-table-column
-					>
-					<el-table-column label="来源" min-width="280"
-						><template #default="{ row }">{{ row.body.source }}</template></el-table-column
-					>
-				</el-table>
-				<section v-if="editing" class="q-section" style="margin-top: 24px">
-					<div class="q-section-head">
+				<section v-if="editing">
+					<div class="catalog-version-bar">
 						<div>
-							<h2>{{ editing.body.name }} · V{{ editing.version }}</h2>
-							<p class="q-muted">{{ dirty ? '有未保存修改' : editable ? '草稿可编辑，校验通过后可发布' : '此版本只读' }}</p>
+							<el-tag :type="editing.status === 'draft' ? 'warning' : 'info'" effect="plain">{{ labels[editing.status] }}</el-tag
+							><strong>{{ editing.body.name }} · V{{ editing.version }}</strong
+							><span class="q-muted">{{ dirty ? '有未保存修改' : editable ? '草稿可编辑' : '此版本只读' }}</span>
 						</div>
-						<div v-if="canManage" class="q-toolbar">
-							<template v-if="editable">
-								<el-button @click="save">保存草稿</el-button><el-button :disabled="dirty" @click="act('trial')">校验指标</el-button>
-								<el-button type="primary" :disabled="dirty" @click="act('publish')">发布指标</el-button>
-								<el-button text type="danger" @click="act('delete')">删除草稿</el-button>
-							</template>
-							<template v-else>
-								<el-button type="primary" @click="act('revise')">创建新版本</el-button>
-								<el-button v-if="editing.status === 'published'" @click="act('retire')">停用此版本</el-button>
-								<el-button v-else @click="act('reactivate')">重新启用</el-button>
-							</template>
+						<div class="catalog-version-actions">
+							<el-button @click="versionHistoryVisible = !versionHistoryVisible">版本记录</el-button
+							><el-button @click="metadataVisible = !metadataVisible">版本信息</el-button>
+							<div v-if="canManage" class="q-toolbar">
+								<template v-if="editable">
+									<el-button @click="save">保存草稿</el-button>
+									<el-button :disabled="!editing.id || dirty" @click="act('trial')">校验指标</el-button>
+									<el-button type="primary" :disabled="!editing.id || dirty" @click="act('publish')">发布指标</el-button>
+									<el-button v-if="editing.id" text type="danger" @click="act('delete')">删除草稿</el-button>
+								</template>
+								<template v-else>
+									<el-button type="primary" @click="act('revise')">创建新版本</el-button>
+									<el-button v-if="editing.status === 'published'" @click="act('retire')">停用此版本</el-button>
+									<el-button v-else @click="act('reactivate')">重新启用</el-button>
+								</template>
+							</div>
 						</div>
 					</div>
-					<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
-						<el-form-item label="指标名称"><el-input v-model="editing.body.name" /></el-form-item>
-						<el-form-item label="生效日期"
-							><el-date-picker v-model="editing.body.effective_from" type="date" value-format="YYYY-MM-DD" :clearable="false"
-						/></el-form-item>
-						<el-form-item label="失效日期（可留空）"
-							><el-date-picker v-model="editing.body.effective_to" type="date" value-format="YYYY-MM-DD" @change="editing.body.effective_to ||= ''"
-						/></el-form-item>
-						<el-form-item label="指标来源"><el-input v-model="editing.body.source" /></el-form-item>
-					</el-form>
-					<el-tabs v-model="tab">
-						<el-tab-pane label="板材基价" name="materials">
-							<el-table :data="editing.body.materials" class="q-table" max-height="550">
+
+					<div v-show="metadataVisible" class="catalog-metadata">
+						<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
+							<el-form-item label="指标名称"><el-input v-model="editing.body.name" /></el-form-item>
+							<el-form-item label="生效日期"
+								><el-date-picker v-model="editing.body.effective_from" type="date" value-format="YYYY-MM-DD" :clearable="false"
+							/></el-form-item>
+							<el-form-item label="失效日期（可留空）"
+								><el-date-picker v-model="editing.body.effective_to" type="date" value-format="YYYY-MM-DD" @change="editing.body.effective_to ||= ''"
+							/></el-form-item>
+							<el-form-item label="指标来源"><el-input v-model="editing.body.source" /></el-form-item>
+						</el-form>
+					</div>
+				</section>
+				<div v-show="versionHistoryVisible || !editing" class="catalog-versions">
+					<h3>风管指标版本</h3>
+					<el-table :data="catalogs" class="q-table" highlight-current-row @row-click="select" style="margin-top: 20px">
+						<el-table-column label="指标名称" min-width="220"
+							><template #default="{ row }"
+								><el-button link type="primary" @click.stop="select(row)">{{ row.body.name }}</el-button></template
+							></el-table-column
+						>
+						<el-table-column prop="version" label="版本" width="75" />
+						<el-table-column label="状态" width="120"
+							><template #default="{ row }"
+								><el-tag :type="row.status === 'published' ? 'success' : 'info'" effect="plain">{{ labels[row.status] }}</el-tag></template
+							></el-table-column
+						>
+						<el-table-column label="生效时间" min-width="200"
+							><template #default="{ row }">{{ row.body.effective_from }} ～ {{ row.body.effective_to || '长期有效' }}</template></el-table-column
+						>
+						<el-table-column label="来源" min-width="280"
+							><template #default="{ row }">{{ row.body.source }}</template></el-table-column
+						>
+					</el-table>
+				</div>
+				<div v-if="editing" class="catalog-layout">
+					<nav class="catalog-directory" aria-label="风管指标目录">
+						<p class="catalog-directory-label">风管目录</p>
+						<div v-for="group in visibleDuctDirectory" :key="group.label" class="catalog-product-group">
+							<p class="catalog-directory-label">{{ group.label }}</p>
+							<div class="catalog-product-list">
+								<button
+									v-for="item in group.items"
+									:key="item.id"
+									type="button"
+									:aria-current="tab === item.id ? 'page' : undefined"
+									@click="tab = item.id"
+								>
+									{{ item.label }}
+								</button>
+							</div>
+						</div>
+					</nav>
+					<div class="catalog-product-content">
+						<p class="q-muted catalog-breadcrumb">风管指标 / {{ currentDuctGroup?.label }}</p>
+						<div class="q-section-head">
+							<h2>{{ currentDuct?.label }}</h2>
+							<el-tag type="info" effect="plain">{{ isDuctMaterial ? '材质指标' : '本版本共用' }}</el-tag>
+						</div>
+						<section v-if="isDuctMaterial" class="catalog-product-section" aria-label="板材基价">
+							<h3>板材基价</h3>
+							<p class="catalog-scope">按当前材质和厚度维护吨价；风管的法兰、配件和付款条件使用本版本共用设置。</p>
+							<el-table :data="materials" class="q-table" max-height="550">
 								<el-table-column prop="name" label="板材名称" min-width="210" />
 								<el-table-column prop="thickness" label="厚度（mm）" width="130" />
 								<el-table-column label="吨价（元/吨）" min-width="140"
-									><template #default="{ row }"><el-input v-model="row.ton_price" :disabled="!editable" inputmode="decimal" /></template
+									><template #default="{ row }"
+										><el-input v-model="row.ton_price" :aria-label="row.name + '吨价'" :disabled="!editable" inputmode="decimal" /></template
 								></el-table-column>
 								<el-table-column prop="source_cell" label="原表位置" min-width="150" />
 							</el-table>
-						</el-tab-pane>
-						<el-tab-pane label="角钢法兰" name="flanges">
+						</section>
+						<section v-if="tab === 'flanges'" class="catalog-product-section" aria-label="角钢法兰价格">
+							<h3>规格与加工价格</h3>
 							<el-table :data="editing.body.flanges" class="q-table" max-height="550">
 								<el-table-column prop="name" label="规格 / 档位" min-width="300" />
 								<el-table-column prop="size" label="型号" width="80" /><el-table-column prop="grade" label="计算档位" width="110" />
 								<el-table-column label="吨价（元/吨）" min-width="130"
-									><template #default="{ row }"><el-input v-model="row.ton_price" :disabled="!editable" inputmode="decimal" /></template
+									><template #default="{ row }"
+										><el-input v-model="row.ton_price" :aria-label="row.name + '吨价'" :disabled="!editable" inputmode="decimal" /></template
 								></el-table-column>
 								<el-table-column label="加工费（元/米）" min-width="145"
-									><template #default="{ row }"><el-input v-model="row.processing_per_m" :disabled="!editable" inputmode="decimal" /></template
+									><template #default="{ row }"
+										><el-input v-model="row.processing_per_m" :aria-label="row.name + '加工费'" :disabled="!editable" inputmode="decimal" /></template
 								></el-table-column>
 							</el-table>
-						</el-tab-pane>
-						<el-tab-pane label="加工费与系数" name="rates">
+						</section>
+						<section v-if="visibleRateKeys.length" class="catalog-product-section" aria-label="风管加工与系数">
+							<h3>{{ isDuctMaterial ? '共用加工参数' : '加工费与系数' }}</h3>
+							<p class="catalog-scope">{{ rateScope }}</p>
 							<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
-								<el-form-item v-for="(_, key) in editing.body.rates" :key="key" :label="rateLabels[key] || key"
-									><el-input v-model="editing.body.rates[key]" inputmode="decimal"
+								<el-form-item v-for="key in visibleRateKeys" :key="key" :label="rateLabels[key] || key"
+									><el-input v-model="editing.body.rates[key]" :aria-label="rateLabels[key] || key" inputmode="decimal"
 								/></el-form-item>
 							</el-form>
-							<p class="q-muted">圆法兰周长按 3.14 × 直径计算；每米基价不含税 10 元、含税 12 元。此已确认规则由 Java 引擎执行。</p>
-						</el-tab-pane>
-						<el-tab-pane label="付款方案" name="payment">
+							<p v-if="tab === 'rates'" class="q-muted">
+								圆法兰周长按 3.14 × 直径计算；每米基价不含税 10 元、含税 12 元。此已确认规则由 Java 引擎执行。
+							</p>
+						</section>
+						<section v-if="tab === 'payment'" class="catalog-product-section">
 							<el-table :data="editing.body.payment_terms" class="q-table">
 								<el-table-column label="范围" width="140"
 									><template #default="{ row }">{{ row.mode === 'with_install' ? '含安装' : '不含安装' }}</template></el-table-column
@@ -107,8 +147,8 @@
 								></el-table-column>
 							</el-table>
 							<p class="q-muted" style="margin-top: 12px">必须保留全部 8 种已确认付款方案；每张报价单仍需由报价员明确选择。</p>
-						</el-tab-pane>
-						<el-tab-pane label="高级公式" name="expressions">
+						</section>
+						<section v-if="tab === 'expressions'" class="catalog-product-section">
 							<el-alert
 								title="仅修改已经核对的业务公式。发布前会检查变量、函数和数值；试算中的单价、行金额仍按 1 位小数四舍五入。"
 								type="warning"
@@ -153,11 +193,12 @@
 								编辑公式时使用英文参数名，中文对照会随输入同步更新。支持 +、-、*、/ 和括号；min 取最小值、max 取最大值、abs 取绝对值、ceil
 								向上取整、floor 向下取整、round 四舍五入（如 round(material_price, 1) 表示板材成本保留 1 位小数）。
 							</p>
-						</el-tab-pane>
-					</el-tabs>
-				</section>
+						</section>
+					</div>
+				</div>
+				<p v-if="editing" class="catalog-footer">各类风管共用当前指标版本。修改后请保存、校验并发布；停用最新版本后不会自动回退到旧价格。</p>
 			</el-tab-pane>
-			<el-tab-pane label="设备指标" name="equipment" lazy><EquipmentCatalogPanel /></el-tab-pane>
+			<el-tab-pane label="设备指标" name="equipment" lazy><EquipmentCatalogPanel :initial-product="String(route.query.product || '')" :initial-section="String(route.query.section || '')" /></el-tab-pane>
 			<el-tab-pane label="安装指标" name="installation" lazy><InstallationCatalogPanel /></el-tab-pane>
 		</el-tabs>
 		<section v-if="settings" class="q-section">
@@ -194,24 +235,50 @@
 <script setup lang="ts" name="QuotationCatalog">
 /** 指标管理入口：风管、设备和安装分别维护版本，风管页面还提供公式中文对照、正式模板确认开关及报价审计查询。 */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { onBeforeRouteLeave, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { auth } from '/@/utils/authFunction';
 import { quoteApi } from '/@/api/quotation';
 import { report, confirm } from '/@/views/quotation/shared';
 import type { Catalog, QuoteSettings } from '/@/types/quotation';
 import '/@/views/quotation/quotation.scss';
+import './catalogLayout.scss';
+import { ductDirectory, ductMaterialGroup, ductRateGroup } from './indicatorDirectory';
 import EquipmentCatalogPanel from './EquipmentCatalogPanel.vue';
 import InstallationCatalogPanel from './InstallationCatalogPanel.vue';
 /** 当前指标类型与风管表格标签页独立保存，设备和安装委托专用面板处理。 */
-const catalogMode = ref('duct');
+const route = useRoute();
+const catalogMode = ref(['equipment', 'installation'].includes(String(route.query.mode)) ? String(route.query.mode) : 'duct');
 /** 风管版本、编辑副本、设置与正文基线用于指标维护；保存或动作完成后重新读取，确保使用最新修订号。 */
 const catalogs = ref<Catalog[]>([]),
 	editing = ref<Catalog>(),
 	settings = ref<QuoteSettings>(),
 	baseline = ref(''),
 	busy = ref(false),
-	tab = ref('materials');
+	tab = ref('galvanized_40');
+const versionHistoryVisible = ref(false),
+	metadataVisible = ref(false);
+const visibleDuctDirectory = computed(() =>
+	ductDirectory.map((group) => ({
+		...group,
+		items: group.items.filter(
+			(item) => item.id !== 'other_material' || editing.value?.body.materials.some((row) => ductMaterialGroup(row.material) === 'other_material')
+		),
+	}))
+);
+const currentDuctGroup = computed(() => visibleDuctDirectory.value.find((group) => group.items.some((item) => item.id === tab.value)));
+const currentDuct = computed(() => currentDuctGroup.value?.items.find((item) => item.id === tab.value));
+const isDuctMaterial = computed(() => ductDirectory[0].items.some((item) => item.id === tab.value));
+const materials = computed(() => (editing.value?.body.materials || []).filter((row) => ductMaterialGroup(row.material) === tab.value));
+const rateGroup = computed(() => (tab.value.startsWith('galvanized_') ? 'galvanized' : tab.value.startsWith('stainless_') ? 'stainless' : tab.value));
+const visibleRateKeys = computed(() => Object.keys(editing.value?.body.rates || {}).filter((key) => ductRateGroup(key) === rateGroup.value));
+const rateScope = computed(() =>
+	rateGroup.value === 'galvanized'
+		? '40g 与 80g 镀锌风管共用以下加工参数，修改任一处会同步影响两类风管。'
+		: rateGroup.value === 'stainless'
+		? '201 与 304 不锈钢风管共用以下加工参数，板材吨价分别维护。'
+		: '本版本中符合条件的风管共用以下参数。'
+);
 const audit = ref<Awaited<ReturnType<typeof quoteApi.audit>>>([]);
 /** 负责人的管理权限与草稿状态共同决定编辑能力，dirty 仅比较当前指标正文以提示未保存修改。 */
 const canManage = computed(() => auth('quote_manage')),

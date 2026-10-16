@@ -18,10 +18,6 @@
 				后分别向上取整，不含税订单不乘税率；现场附加费单独计税、取整和列示，不分摊到产品行。材料与安装汇总后统一乘付款系数。
 			</p>
 			<el-form :disabled="locked" label-position="top" class="q-grid" @submit.prevent>
-				<el-form-item label="安装省区"
-					><el-select v-model="options.region" filterable allow-create clearable placeholder="可输入其他省区"
-						><el-option v-for="region in ['贵州', '四川', '云南', '广西', '陕西']" :key="region" :value="region" :label="region" /></el-select
-				></el-form-item>
 				<el-form-item v-if="hasDuctRows" label="风管安装辅材"
 					><el-checkbox v-model="options.include_auxiliaries">包含辅材</el-checkbox></el-form-item
 				>
@@ -46,7 +42,7 @@
 					<el-input v-model="options.site_waive_reason" maxlength="500" placeholder="请填写本次不另行计取现场附加费的原因" />
 				</el-form-item>
 			</el-form>
-			<p class="q-muted">{{ siteConditionHint }}</p>
+			<p class="q-muted">{{ body.project_region_confirmed ? `按${body.project_region}安装规则计价` : '请先在基本信息中确认项目所在省份' }}。{{ siteConditionHint }}</p>
 			<div class="q-section-head installation-extras-head">
 				<div>
 					<h3>独立安装项目</h3>

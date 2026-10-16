@@ -101,7 +101,7 @@ const projectKindMismatch = computed(() => !!selectedProject.value && !!editorKi
 const isDuctEditor = computed(() => editorKind.value === 'duct');
 /** 结合产品名称、规格和安装项文本识别风机编辑场景；陕西分档风机显示需人工确认的功率字段。 */
 const productText = computed(() => [props.rowName, props.rowSpec, props.rowCategory, props.entry.name, props.entry.category].filter(Boolean).join(' '));
-const isFanEditor = computed(() => /风机|通风机|HTF|HTFC|SWF|GXF|HL3/i.test(productText.value));
+const isFanEditor = computed(() => /风机|通风机|HTF|HTFC|SWF|GXF|HL3|PYHL|SZF/i.test(productText.value));
 const showFanPower = computed(
 	() => editorKind.value === 'equipment' && region.value === '陕西' && (isFanEditor.value || !!selectedProject.value?.power_prices?.length)
 );
@@ -117,7 +117,7 @@ const showOtherAuxiliaryPrice = computed(
 /** 选择项目之前先明确产品类别和整单安装省区；留空表示交由试算匹配，有歧义仍需人工选定。 */
 const projectPlaceholder = computed(() => {
 	if (!editorKind.value) return '请先确认产品品类';
-	if (!region.value) return '请先填写整单安装省区';
+	if (!region.value) return '请先选择项目所在省份';
 	return '留空则试算时匹配；有歧义须人工选定';
 });
 /** 显示安装项目的未税销售单价或功率分档单价，帮助报价员核对选中的原表项目。 */

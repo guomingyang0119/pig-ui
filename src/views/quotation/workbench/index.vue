@@ -17,7 +17,7 @@
 				</div>
 			</header>
 			<el-alert
-				v-if="!activeCatalog && !activeEquipment && !failed"
+				v-if="catalogsLoaded && !activeCatalog && !activeEquipment && !failed"
 				title="尚无可用的供货指标，请负责人按清单涉及的材料或设备，到指标管理核对并发布。"
 				type="warning"
 				:closable="false"
@@ -49,6 +49,7 @@
 					<el-button v-if="quote.body.ai_review_status" @click="downloadStandard">下载待核验报价单</el-button>
 					<el-button v-if="!locked && quote.body.ai_review_status" @click="chooseAiInputFile">导回已校验清单</el-button>
 					<el-button v-if="!locked" @click="save(false)" :loading="saving" :disabled="reviewingAi">保存草稿</el-button>
+					<el-button v-if="quote.body.excel_parameter_review" @click="excelResultDialog = true">查看最近一次Excel试算结果</el-button>
 					<el-button v-if="!locked && quote.body.ai_review_status" type="primary" @click="approveAi" :loading="reviewingAi" :disabled="saving">
 						{{ aiReviewRequired ? '核验完成并试算' : '重新试算' }}
 					</el-button>
@@ -94,13 +95,46 @@
 				<el-form label-position="top" :disabled="locked" class="q-grid" @submit.prevent>
 					<el-form-item label="客户名称"><el-input v-model="quote.body.customer" placeholder="填写客户名称" /></el-form-item>
 					<el-form-item label="项目名称"><el-input v-model="quote.body.project" placeholder="填写工程项目" /></el-form-item>
+					<el-form-item label="项目所在省份 · 必选">
+						<el-select v-model="quote.body.project_region" filterable clearable placeholder="请选择本项目所在省份" @change="projectProvinceChanged">
+							<el-option v-for="province in projectProvinces" :key="province" :value="province" :label="province" />
+						</el-select>
+					</el-form-item>
 					<el-form-item label="联系人 / 电话"><el-input v-model="quote.body.contact" /></el-form-item>
 					<el-form-item label="报价日期"><el-date-picker v-model="quote.body.quote_date" value-format="YYYY-MM-DD" type="date" /></el-form-item>
-					<el-form-item label="送货地点" style="grid-column: span 2"><el-input v-model="quote.body.delivery_location" /></el-form-item>
+					<el-form-item label="详细送货地址"><el-input v-model="quote.body.delivery_location" /></el-form-item>
 					<el-form-item label="报价备注（会进入客户文件）" style="grid-column: span 2"
 						><el-input v-model="quote.body.note" type="textarea" :rows="1" maxlength="1000"
 					/></el-form-item>
 				</el-form>
+				<p class="q-muted">项目省份统一用于地区材料成本和安装计价；运费默认按此省份计算，是否安装、是否含运费仍按整单选择。</p>
+				<el-alert v-if="legacyRegionConflict(quote.body)" :title="legacyRegionConflict(quote.body)" type="warning" :closable="false" />
+				<p v-if="!locked && !quote.body.project_region_confirmed && quote.body.project_region_suggestions?.length" class="q-muted">
+					资料中出现省份：{{ quote.body.project_region_suggestions.join('、') }}，请核对项目所在地。
+					<el-button v-if="quote.body.project_region_suggestions.length === 1" link type="primary" @click="acceptSuggestedProvince">确认采用 {{ quote.body.project_region_suggestions[0] }}</el-button>
+				</p>
+				<el-button v-if="!locked && quote.body.project_region && !quote.body.project_region_confirmed" link type="primary" @click="projectProvinceChanged">确认项目省份为 {{ quote.body.project_region }}</el-button>
+				<div v-if="!locked" class="q-toolbar">
+					<el-checkbox v-model="quote.body.different_delivery_region" @change="deliveryProvinceChanged">送货地与项目所在地不同</el-checkbox>
+					<el-select v-if="quote.body.different_delivery_region" v-model="quote.body.delivery_region" filterable clearable style="width: 240px" placeholder="请选择实际送货省份" aria-label="实际送货省份" @change="deliveryProvinceChanged">
+						<el-option v-for="province in projectProvinces" :key="province" :value="province" :label="province" />
+					</el-select>
+				</div>
+				<p v-else-if="quote.body.different_delivery_region" class="q-muted">实际送货省份：{{ quote.body.delivery_region }}</p>
+				<el-alert v-if="quote.body.region_prices_confirmed === false" title="地区已改变，原人工价格及运费已保留，请核对后确认；重新试算将重新判断整单 8000 元运费门槛。" type="warning" :closable="false">
+					<el-checkbox v-if="!locked" v-model="quote.body.region_prices_confirmed">已核对人工价格和运费，按当前地区继续试算</el-checkbox>
+				</el-alert>
+				<el-collapse v-if="quote.body.region_manual_review_snapshot">
+					<el-collapse-item title="查看地区变更前的 Excel 人工报价" name="previous-manual-prices">
+						<p class="q-muted">来源：{{ quote.body.region_manual_review_snapshot.filename }}。以下原价格保留供核对，不会自动覆盖新地区的试算结果；如需采用人工报价，请重新导出校对版填写并导回。</p>
+						<el-table :data="(quote.body.region_manual_review_snapshot.lines || []).slice((manualRegionPage - 1) * 20, manualRegionPage * 20)">
+							<el-table-column prop="name" label="产品" /><el-table-column prop="quantity" label="数量" />
+							<el-table-column prop="material_unit" label="原材料单价" /><el-table-column prop="material_amount" label="原材料金额" />
+							<el-table-column prop="installation_amount" label="原安装金额" />
+						</el-table>
+						<el-pagination v-model:current-page="manualRegionPage" :page-size="20" :total="quote.body.region_manual_review_snapshot.lines?.length || 0" layout="prev, pager, next, total" />
+					</el-collapse-item>
+				</el-collapse>
 			</section>
 			<section class="q-section">
 				<h2 style="margin-bottom: 16px">整单供货条件</h2>
@@ -134,14 +168,6 @@
 					<el-form-item label="整单是否含运费"
 						><el-select v-model="quote.body.include_freight" placeholder="请选择整单运费口径" @change="freightChanged">
 							<el-option :value="false" label="不含运费" /><el-option :value="true" label="含运费" /></el-select
-					></el-form-item>
-					<el-form-item v-if="quote.body.include_freight && quote.body.equipment_options && (!isAuto || hasEquipmentRows)" label="送货省区"
-						><el-select v-model="quote.body.equipment_options.region" clearable placeholder="含运费时必选">
-							<el-option
-								v-for="region in ['贵州', '四川', '广西', '云南', '陕西', '海南']"
-								:key="region"
-								:value="region"
-								:label="region" /></el-select
 					></el-form-item>
 					<el-form-item
 						v-if="quote.body.include_freight && quote.body.equipment_options && (!isAuto || hasEquipmentRows)"
@@ -192,15 +218,17 @@
 					<details>
 						<summary style="cursor: pointer; padding: 10px 0">整单实际配件数量 / 角钢米数（客户有提供时填写）</summary>
 						<el-form :disabled="locked" label-position="top" class="q-grid" style="margin-top: 10px" @submit.prevent>
-							<el-form-item label="共板角码数量（个）"><el-input v-model="options.corner_count" placeholder="未提供则留空" /></el-form-item>
-							<el-form-item label="共板卡扣长度（米）"><el-input v-model="options.clip_meters" placeholder="未提供则留空" /></el-form-item>
-							<el-form-item label="整单 30# 角钢实际米数"><el-input v-model="options.flange_30_meters" placeholder="未提供则留空" /></el-form-item>
-							<el-form-item label="整单 40# 角钢实际米数"><el-input v-model="options.flange_40_meters" placeholder="未提供则留空" /></el-form-item>
+							<el-form-item label="共板角码数量（个）"><el-input v-model="options.corner_count" :disabled="options.accessory_review?.some(g => g.key === 'corner_count')" placeholder="未提供则留空" /></el-form-item>
+							<el-form-item label="共板卡扣长度（米）"><el-input v-model="options.clip_meters" :disabled="options.accessory_review?.some(g => g.key === 'clip_meters')" placeholder="未提供则留空" /></el-form-item>
+							<el-form-item label="整单 30# 角钢实际米数"><el-input v-model="options.flange_30_meters" :disabled="options.accessory_review?.some(g => g.key === 'flange_30_meters')" placeholder="未提供则留空" /></el-form-item>
+							<el-form-item label="整单 40# 角钢实际米数"><el-input v-model="options.flange_40_meters" :disabled="options.accessory_review?.some(g => g.key === 'flange_40_meters')" placeholder="未提供则留空" /></el-form-item>
 						</el-form>
 						<p class="q-muted">整单角钢米数与本行角钢米数不能同时填写。共板半成品配件两项都留空时按面积取费；填写后仅按实际填写项计费。</p>
+						<p v-if="options.accessory_review?.length" class="q-muted">同类配件的数量由下方“同类配件核对”区确定，此处不可重复填写。</p>
 					</details>
 				</el-collapse-item>
 			</el-collapse>
+			<AccessoryReviewPanel :options="options" :locked="locked" :dirty="dirty" />
 			<InstallationPanel
 				id="quote-installation-conditions"
 				:body="quote.body"
@@ -231,10 +259,16 @@
 						</el-badge>
 						<el-button @click="autoClassify">重新识别清单</el-button>
 						<el-button :disabled="!batchRows.length" @click="batchParameterDialog?.open()">批量补充（{{ batchRows.length }} 项）</el-button>
+						<el-button :disabled="dirty || busy || saving || !failedAssistTargets.length" @click="aiRetryDialog?.open()">AI辅助识别失败项目（{{ failedAssistTargets.length }}）</el-button>
 						<el-button :disabled="!batchRows.length" @click="scopeDialog?.open(batchRows)">批量设置范围</el-button>
 						<el-button @click="addRow">＋ 添加项目</el-button>
 					</div>
+					<el-button v-if="quote.body.ai_retry_report" :disabled="busy || saving" @click="aiRetryDialog?.open(true)">查看最近一次AI辅助结果</el-button>
 				</div>
+				<el-alert v-if="quote.result && !dirty && !quote.result_stale && failedSupplyCount" type="warning" :closable="false"
+					:title="`${failedSupplyCount} 项供货报价未完成，其中 ${failedAssistTargets.length} 项可尝试AI辅助识别；其余项目需补资料、确认规则或人工处理。`">
+					<p>是否使用AI辅助识别？点击上方按钮后才会调用，已成功报价的项目不参与。</p>
+				</el-alert>
 				<div class="q-toolbar" style="margin: 12px 0">
 					<span>总数 {{ scopeCounts.total }}</span><span>参与 {{ scopeCounts.participating }}（含仅安装）</span>
 					<span>已完成 {{ scopeCounts.completed }}</span><span>未完成 {{ scopeCounts.pending }}</span><span>不报价 {{ scopeCounts.excluded }}</span>
@@ -246,11 +280,16 @@
 						<el-option v-for="category in productCategories" :key="category" :value="category" :label="category" />
 					</el-select>
 					<el-checkbox v-model="onlyReviewRows">仅看待核对 / 待确认行</el-checkbox>
+					<el-select v-model="importIssueKind" clearable placeholder="全部导入问题" style="width: 160px">
+						<el-option v-for="(label, key) in importIssueLabels" :key="key" :value="key" :label="label" />
+					</el-select>
 					<span v-if="!locked">已选 {{ batchRows.length }} 项（跨页保留）</span>
 					<el-button v-if="batchRows.length" link @click="selectedRowIds = []">清空选择</el-button>
 				</div>
 				<p v-if="missingRowIdCount && !locked" class="q-muted">{{ missingRowIdCount }} 行缺少历史行标识，请逐行设置范围；这些行暂不支持批量选择。</p>
+				<p v-if="!locked" class="q-muted">普通导入不调用AI。仅需辅助理解歧义时选择明细后使用；有修改请先保存。</p>
 				<el-table
+					ref="productTable"
 					:data="visibleProductRows"
 					:row-key="productRowKey"
 					class="q-table"
@@ -474,6 +513,17 @@
 				<ul v-if="quote.result?.issues.length" class="q-issues">
 					<li v-for="issue in quote.result.issues" :key="issue">{{ issue }}</li>
 				</ul>
+				<details v-if="quote.body.manual_review_snapshot" class="q-muted">
+					<summary>查看已保留的人工报价（{{ quote.body.manual_review_snapshot.review.filename }}）</summary>
+					<p>以下为上次人工确认的价格，供核对；重新试算后以当前结果为准。</p>
+					<el-table :data="quote.body.manual_review_snapshot.lines" max-height="320">
+						<el-table-column prop="name" label="产品" min-width="180" />
+						<el-table-column prop="quantity" label="数量" />
+						<el-table-column prop="material_unit" label="材料单价" />
+						<el-table-column prop="material_amount" label="材料金额" />
+						<el-table-column prop="installation_amount" label="安装费" />
+					</el-table>
+				</details>
 				<div class="q-summary">
 					<div class="q-fees">
 						<div class="q-fee">
@@ -489,7 +539,7 @@
 						<el-tooltip v-for="[key, label] in visibleFees" :key="key" :content="quote.result?.fees[key]?.reason || ''">
 							<div class="q-fee">
 								<span class="q-muted">{{ label }}</span
-								><strong class="q-number">¥ {{ money(quote.result?.fees[key]?.amount) }}</strong>
+									><strong class="q-number">{{ quote.result?.fees[key]?.status === 'pending' ? '待确认' : '¥ ' + money(quote.result?.fees[key]?.amount) }}</strong>
 							</div>
 						</el-tooltip>
 					</div>
@@ -540,10 +590,15 @@
 			@edit="openRow"
 		/>
 		<BatchParameterDialog ref="batchParameterDialog" :rows="batchRows" :locked="locked || busy || saving || reviewingAi" @applied="batchApplied" />
+		<AiRetryDialog v-if="quote" ref="aiRetryDialog" :quote="quote" :rows="failedAssistTargets" :dirty="dirty" :locked="locked || busy || saving || reviewingAi" :apply-batch="applyAiRetryBatch" @report="receiveAiRetryReport" @locate="locateAiRetryRow" />
 		<QuoteScopeDialog ref="scopeDialog" :installation-included="!!quote?.body.installation_options?.included" :locked="locked || busy || saving || reviewingAi" @applied="scopeApplied" @installation-setup="openInstallationSetup" />
 		<input ref="reviewFile" type="file" accept=".xlsx" hidden @change="previewReviewFile" />
 		<el-dialog v-model="reviewDialog" title="确认回导人工报价" width="min(1500px, 96vw)" top="4vh" class="review-import-dialog" destroy-on-close>
 			<template v-if="reviewPreview">
+				<el-alert v-if="reviewPreview.location_changed" type="warning" :closable="false" title="Excel 中的地址与系统不同，本次导回不会改变项目省份或送货地址。需要更改时，请返回工作台修改后重新试算。">
+					<p>Excel：{{ reviewPreview.location_text || '空白' }}</p><p>系统：{{ reviewPreview.system_location }}</p>
+					<el-checkbox v-model="keepSystemLocation">已核对差异，保留系统地址继续导回</el-checkbox>
+				</el-alert>
 				<section v-if="reviewPreview.scope_restorations?.length" class="review-import-section">
 					<el-alert title="以下填价会恢复参与供货报价，请逐项明确确认" description="预览合计仍按原报价范围计算。全部勾选后才能回导；如不恢复，请取消并修改校对文件后重新上传。" type="warning" :closable="false" />
 					<p class="q-muted">安装请填写安装金额；仅填安装单价不会生成报价。</p>
@@ -555,13 +610,17 @@
 				</section>
 				<el-alert
 					:title="
-						reviewPreview.pending_count
+						reviewPreview.input_recalculated
+							? `已按修改后的参数预试算，仍有 ${reviewPreview.pending_count} 项待确认。确认导回后统一保存参数并重新试算。`
+							: reviewPreview.pending_count
 							? `仍有 ${reviewPreview.pending_count} 行价格未补全，回导后仍不能生成正式报价。`
 							: `共识别 ${reviewPreview.change_count} 处修改，回导后付款前合计为 ${money(reviewPreview.before_payment_total)} 元。`
 					"
 					:type="reviewPreview.pending_count ? 'warning' : 'success'"
 					:closable="false"
 				/>
+				<ExcelReviewResults v-if="reviewPreview.input_recalculated" :rows="reviewPreview.input_results || []" @locate="locateExcelRow" />
+				<p v-if="reviewPreview.input_recalculated" class="q-muted">{{ reviewPreview.calculation_issues?.join('；') }}</p>
 				<div class="review-import-summary">
 					<div>
 						<strong>{{ reviewPreview.changed_row_count }}</strong
@@ -596,7 +655,7 @@
 					</div>
 				</div>
 
-				<section v-if="changedReviewRows.length" class="review-import-section">
+				<section v-if="changedReviewRows.length && !reviewPreview.input_recalculated" class="review-import-section">
 					<div class="review-import-heading">
 						<h3>已修改产品</h3>
 						<span>修改后的值加粗显示，下面保留原值；蓝色项目由系统根据数量补算。</span>
@@ -604,7 +663,7 @@
 					<ReviewImportTable :rows="changedReviewRows" :installation="reviewPreview.column_count === 12" />
 				</section>
 
-				<section v-if="pendingReviewRows.length" class="review-import-section pending">
+				<section v-if="pendingReviewRows.length && !reviewPreview.input_recalculated" class="review-import-section pending">
 					<div class="review-import-heading">
 						<h3>仍待补全产品</h3>
 						<span>这些产品没有形成完整价格，回导后仍不能生成正式报价。</span>
@@ -621,7 +680,7 @@
 			</template>
 			<template #footer>
 				<el-button @click="reviewDialog = false">取消</el-button>
-				<el-button type="primary" :disabled="!reviewPreview?.change_count || !allScopeRestorationsConfirmed" @click="applyReviewFile"
+				<el-button type="primary" :disabled="!reviewPreview?.change_count || !allScopeRestorationsConfirmed || (reviewPreview.location_changed && !keepSystemLocation)" @click="applyReviewFile"
 					>确认回导 {{ reviewPreview?.changed_row_count || 0 }} 个产品</el-button
 				>
 			</template>
@@ -640,13 +699,13 @@
 			<el-alert v-if="aiInputError" :title="aiInputError" type="error" :closable="false" show-icon />
 			<template v-if="aiInputPreview">
 				<el-alert
-					:title="`共 ${aiInputPreview.product_row_count} 条明细、${aiInputPreview.special_row_count} 条汇总或备注，修改了 ${aiInputPreview.changed_row_count} 行、${aiInputPreview.change_count} 个字段。确认后更新当前草稿，请点击“核验完成并试算”。`"
+					:title="`共 ${aiInputPreview.product_row_count} 条明细、${aiInputPreview.special_row_count} 条汇总或备注，修改了 ${aiInputPreview.changed_row_count} 行、${aiInputPreview.change_count} 个字段。确认后统一更新参数、记录人工核验并重新试算。`"
 					type="warning"
 					:closable="false"
 					show-icon
 				/>
 				<p class="q-muted">
-					主表可修改名称、规格、厚度、法兰、单位、数量和备注，“人工核对”表可补充参数。请保留整份文件，不增删或排序产品行；新增材料或取消计价请在系统中操作，金额由系统试算生成。
+					主表右侧“报价参数（可修改）”按“字段：值”修改；名称、规格、厚度、法兰、单位、数量和备注直接修改原列。原表位置和待处理原因仅供查看。请保留整份文件，不增删或排序产品行，金额由系统统一试算。
 				</p>
 				<p class="q-muted">客户名称、项目和报价日期等信息请在工作台页面修改。</p>
 				<el-table v-if="aiInputPreview.change_count" :data="aiInputPreview.changes" border max-height="440" class="ai-input-changes">
@@ -671,8 +730,14 @@
 			<template #footer>
 				<el-button :disabled="aiInputBusy" @click="aiInputDialog = false">取消</el-button>
 				<el-button type="primary" :loading="aiInputBusy" :disabled="!aiInputPreview?.change_count || !!aiInputError" @click="applyAiInputFile">
-					确认更新原草稿
+					确认核验并统一试算
 				</el-button>
+			</template>
+		</el-dialog>
+		<el-dialog v-model="excelResultDialog" title="Excel参数回导 · 试算结果" width="min(1250px, 96vw)">
+			<template v-if="quote?.body.excel_parameter_review">
+				<p>{{ quote.body.excel_parameter_review.filename }} · {{ quote.body.excel_parameter_review.calculated_at }}（本次回导时的结果）</p>
+				<ExcelReviewResults :rows="quote.body.excel_parameter_review.input_results" @locate="locateExcelRow" />
 			</template>
 		</el-dialog>
 		<el-drawer
@@ -683,6 +748,11 @@
 			destroy-on-close
 		>
 			<div v-if="selectedRow" class="quotation-page">
+				<section v-if="selectedRow.import_review" class="q-section">
+					<p v-if="selectedRow.import_review.section">所属章节：{{ selectedRow.import_review.section }}</p>
+					<p v-if="selectedRow.import_review.dimension_expression">原尺寸区间：{{ selectedRow.import_review.dimension_expression }}</p>
+					<p v-for="issue in selectedRow.import_review.issues" :key="issue.code" class="q-muted">{{ importIssueLabels[issue.kind] }}：{{ issue.message }}</p>
+				</section>
 				<el-alert
 					v-if="currentAiCorrectionReason(selectedRow)"
 					title="系统纠正说明"
@@ -724,6 +794,9 @@
 					<template v-else>
 						<el-form-item label="设备数量"><el-input v-model="selectedRow.quantity" /></el-form-item>
 						<el-form-item label="客户单位"><el-input v-model="selectedRow.unit" placeholder="台 / 个 / ㎡" /></el-form-item>
+						<p v-if="selectedRow.attributes.equipment_kind === 'plenum' || selectedRow.attributes.source_total_area" class="q-muted q-wide">
+							静压箱按设备个数报价，单个成本由箱体展开面积计算。客户总面积只用于核对，不会再计一份费用。
+						</p>
 						<p class="q-muted q-wide">规格中明确写出的尺寸和参数会自动识别；手工补填参数优先。无法唯一选型时，请核对并选择候选。</p>
 					</template>
 					<el-form-item label="产品类别"
@@ -771,7 +844,7 @@
 						<p class="q-error">{{ selectedResult.reason }}</p>
 						<el-radio-group v-model="selectedRow.candidate_id" :disabled="locked" aria-label="换气扇候选" class="fan-candidates">
 							<el-radio v-for="candidate in selectedResult.candidates" :key="candidate.id" :label="candidate.id">
-								{{ candidate.body.attributes.name }} / {{ candidate.body.name }}；风量 {{ candidate.body.attributes.airflow }} m³/h；功率 {{ candidate.body.attributes.power || '未提供' }}{{ candidate.body.attributes.power ? ' W' : '' }}
+								{{ candidate.body.attributes.name }} / {{ candidate.body.name }}；风量 {{ fanParameterRange(candidate.body.attributes, 'airflow') }} m³/h；功率 {{ candidate.body.attributes.power || '未提供' }}{{ candidate.body.attributes.power ? ' W' : '' }}
 							</el-radio>
 						</el-radio-group>
 						<p class="q-muted">请选择确认采用的型号，保存并试算后计价。</p>
@@ -796,19 +869,19 @@
 									<span>功率</span><strong>{{ selectedFan.powers?.join('/') || '—' }} kW</strong>
 								</div>
 								<div>
-									<span>风量</span><strong>{{ selectedFan.airflow || '—' }} m³/h</strong>
+									<span>风量</span><strong>{{ fanParameterRange(selectedFan, 'airflow') }} m³/h</strong>
 								</div>
 								<div>
-									<span>风压</span><strong>{{ selectedFan.pressure || '—' }} Pa</strong>
+									<span>风压</span><strong>{{ fanParameterRange(selectedFan, 'pressure') }} Pa</strong>
 								</div>
 								<div>
 									<span>转速</span><strong>{{ selectedFan.speed || '—' }} r/min</strong>
 								</div>
 								<div v-if="selectedFan.airflow_low">
-									<span>低速档风量</span><strong>{{ selectedFan.airflow_low }} m³/h</strong>
+									<span>低速档风量</span><strong>{{ fanParameterRange(selectedFan, 'airflow_low') }} m³/h</strong>
 								</div>
 								<div v-if="selectedFan.pressure_low">
-									<span>低速档风压</span><strong>{{ selectedFan.pressure_low }} Pa</strong>
+									<span>低速档风压</span><strong>{{ fanParameterRange(selectedFan, 'pressure_low') }} Pa</strong>
 								</div>
 								<div v-if="selectedFan.poles?.length">
 									<span>电机极数</span><strong>{{ selectedFan.poles.join('/') }} 极</strong>
@@ -827,7 +900,7 @@
 								<el-radio v-for="candidate in selectedResult.candidates" :key="candidate.id" :label="candidate.id" :disabled="!!candidate.body.attributes.requirement_mismatches">
 									<strong>{{ candidate.body.name }}</strong
 									>；机号 {{ candidate.body.attributes.size || '—' }}；功率 {{ candidate.body.attributes.powers.join('/') }} kW；风量
-									{{ candidate.body.attributes.airflow }} m³/h；风压 {{ candidate.body.attributes.pressure }} Pa；转速
+									{{ fanParameterRange(candidate.body.attributes, 'airflow') }} m³/h；风压 {{ fanParameterRange(candidate.body.attributes, 'pressure') }} Pa；转速
 									{{ candidate.body.attributes.speed }} r/min
 									<span v-if="candidate.body.attributes.requirement_mismatches" class="q-error">；参考型号，{{ candidate.body.attributes.requirement_mismatches }}</span>
 								</el-radio>
@@ -841,8 +914,9 @@
 						<el-tag effect="plain" :type="selectedRow.excluded ? 'info' : selectedRow.installation_only ? 'warning' : 'success'">{{ quoteScopeLabel(selectedRow) }}</el-tag>
 						<el-button v-if="!locked" link type="primary" @click="scopeDialog?.open([selectedRow])">设置报价范围</el-button>
 						<p v-if="selectedRow.excluded" class="q-muted">不报价原因：{{ selectedRow.exclude_reason }}</p>
-						<p v-if="!selectedRow.excluded && selectedRow.source_issue_reason" class="q-error">{{ selectedRow.source_issue_reason }}</p>
-						<el-checkbox v-if="selectedRow.source_issue" v-model="selectedRow.source_issue_confirmed"
+						<p v-if="!selectedRow.excluded && selectedRow.source_issue_reason && !(selectedRow.diameter_review?.conflict && selectedRow.source_issue_confirmed)" class="q-error">{{ selectedRow.source_issue_reason }}</p>
+						<SourceDiameterPanel :row="selectedRow" :review="selectedRow.diameter_review" :locked="locked" />
+						<el-checkbox v-if="selectedRow.source_issue && !selectedRow.diameter_review?.conflict" v-model="selectedRow.source_issue_confirmed"
 							>已核对原资料异常或参数冲突，并确认本次采用的数据</el-checkbox
 						>
 					</div>
@@ -954,7 +1028,8 @@
 </template>
 <script setup lang="ts" name="QuotationWorkbench">
 /** 报价工作台主页面：维护客户清单与整单条件，协调导入、逐行规则、安装、人工核验、保存试算及草稿/正式导出。金额与正式可导出状态以服务端结果为准。 */
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import type { AiRetryReport } from '/@/types/quotation';
 import type { ComputedRef } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -965,6 +1040,9 @@ import { money, stateLabels, report, confirm, blankRow, rowFields, flangeTypes, 
 import type { Catalog, Quote, QuoteRow, ExportRecord, InstallationCatalogBody, ReviewImportPreview, AiInputImportPreview, ProductRuleBody } from '/@/types/quotation';
 import ProductRuleDialog from './ProductRuleDialog.vue';
 import SourceCompareDialog from './SourceCompareDialog.vue';
+import AiRetryDialog from './AiRetryDialog.vue';
+import { failedAssistRows } from './failedQuoteAssist';
+import { importIssueLabels } from './importReview';
 import BatchParameterDialog from './BatchParameterDialog.vue';
 import QuoteScopeDialog from './QuoteScopeDialog.vue';
 import { filterQuoteRows, pageQuoteRows, quoteScopeCounts, quoteScopeLabel, selectPageRows, selectedQuoteRows, scopeRestorationsConfirmed, scopePaymentTerms } from './quoteScope';
@@ -983,9 +1061,16 @@ import {
 	updateRowParameter,
 } from './rowReview';
 import InstallationPanel from './InstallationPanel.vue';
+import ExcelReviewResults from './ExcelReviewResults.vue';
+import AccessoryReviewPanel from './AccessoryReviewPanel.vue';
+import SourceDiameterPanel from './SourceDiameterPanel.vue';
 import InstallationEntryFields from './InstallationEntryFields.vue';
 import ReviewImportTable from './ReviewImportTable.vue';
 import { prepareInstallation, blankInstallation } from '/@/views/quotation/installation';
+import { prepareProjectRegion, syncProjectRegion, projectRegionIssue, projectProvinces, legacyRegionConflict, hasManualRegionPrices } from './projectRegion';
+const keepSystemLocation = ref(false);
+const regionNeedsSave = ref(false);
+const manualRegionPage = ref(1);
 import QuoteList from '/@/views/quotation/QuoteList.vue';
 import ImportDialog from '/@/views/quotation/ImportDialog.vue';
 import AiImportDialog from '/@/views/quotation/AiImportDialog.vue';
@@ -1008,9 +1093,10 @@ const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	aiImportDialog = ref<InstanceType<typeof AiImportDialog>>(),
 	productRuleDialog = ref<InstanceType<typeof ProductRuleDialog>>(),
 	productRules = ref<Catalog<ProductRuleBody>[]>([]),
-	productRulesLoadState = ref<'loading' | 'ready' | 'error'>('loading'),
+	productRulesLoadState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle'),
 	reviewFile = ref<HTMLInputElement>(),
 	reviewDialog = ref(false),
+	excelResultDialog = ref(false),
 	reviewPreview = ref<ReviewImportPreview>(),
 	restoreScopeRowIds = ref<string[]>([]),
 	aiInputFile = ref<HTMLInputElement>(),
@@ -1030,6 +1116,7 @@ const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	sections = ref(['conditions']);
 const hasDraftProductRules = computed(() => productRules.value.some((rule) => rule.status === 'draft'));
 const productRulesNotice = computed(() => {
+	if (productRulesLoadState.value === 'idle') return '产品规则管理：点击查看规则及待处理草稿。';
 	if (productRulesLoadState.value === 'error')
 		return hasDraftProductRules.value
 			? '产品规则管理：规则状态刷新失败，仍有已知待处理草稿，请重新加载。'
@@ -1041,6 +1128,8 @@ const productRulesNotice = computed(() => {
 		: '产品规则管理：当前可见规则没有待处理草稿。';
 });
 let productRulesRequest = 0;
+let quoteLoadRequest = 0;
+let initializeRequest = 0;
 /** 编辑与导出按钮分别检查账号权限；只有草稿可编辑，已定稿或归档版本通过修订继续处理。 */
 const canEdit = computed(() => auth('quote_edit')),
 	canExport = computed(() => auth('quote_export'));
@@ -1051,6 +1140,46 @@ const sourceCompareDialog = ref<InstanceType<typeof SourceCompareDialog>>(),
 	sourceIndex = ref(0),
 	selectedRowIds = ref<string[]>([]);
 const batchRows = computed(() => selectedQuoteRows(quote.value?.body.rows || [], selectedRowIds.value));
+const aiRetryDialog = ref<InstanceType<typeof AiRetryDialog>>();
+const failedAssistTargets = computed(() => quote.value?.result_stale ? [] : failedAssistRows(quote.value?.body.rows || [], quote.value?.result?.rows || []));
+const failedSupplyCount = computed(() => quote.value?.result?.rows.filter(row => row.status === 'pending').length || 0);
+const locatedAiRowId = ref('');
+const productTable = ref<{ $el: HTMLElement; setScrollTop: (top: number) => void }>();
+function receiveAiRetryReport(value: AiRetryReport) {
+	if (quote.value) quote.value.body.ai_retry_report = value;
+}
+async function applyAiRetryBatch(reportId: string, ids: string[], undo: boolean) {
+	if (!quote.value || dirty.value || locked.value || busy.value || saving.value) throw { code: 1, msg: '报价已有修改或正在处理，请保存后重新核对建议。' };
+	const target = quote.value;
+	const replaceManualReview = !!(target.result?.manual_review_import || target.body.manual_review_snapshot?.requires_confirmation);
+	if (replaceManualReview) {
+		try { await confirm('本单包含人工校对价格。统一试算会按系统规则替换人工结果，原人工价格保留供核对。确认继续？'); }
+		catch { throw { code: 1, msg: '已取消，本批修改未保存，勾选保留。' }; }
+		if (quote.value !== target || dirty.value) throw { code: 1, msg: '报价已变化，请重新打开建议。' };
+	}
+	busy.value = true;
+	try {
+		const response = await quoteApi.applyAiRetry(target.id, target.revision, reportId, ids, undo, replaceManualReview);
+		if (!(await applyMutation(target, response, true))) throw new Error('报价已切换，请打开原报价查看结果');
+	} finally { busy.value = false; }
+}
+async function locateAiRetryRow(rowId: string) {
+	const index = quote.value?.body.rows.findIndex(row => row.row_id === rowId) ?? -1;
+	if (index < 0 || !quote.value) { ElMessage.warning('原清单行不存在，请刷新报价'); return; }
+	productSearch.value = ''; productCategory.value = ''; importIssueKind.value = ''; onlyReviewRows.value = false;
+	await nextTick();
+	productPage.value = Math.floor(index / productPageSize.value) + 1; locatedAiRowId.value = rowId;
+	await nextTick();
+	const element = productTable.value?.$el.querySelector<HTMLElement>('.ai-located-row');
+	if (element) productTable.value?.setScrollTop(element.offsetTop);
+	openRow(quote.value.body.rows[index]);
+}
+async function locateExcelRow(rowId: string) {
+	excelResultDialog.value = false;
+	reviewDialog.value = false;
+	await locateAiRetryRow(rowId);
+}
+const importIssueKind = ref('');
 const hasSourceRows = computed(() => quote.value?.body.rows.some((row) => !!row.original || !!row.source_sheet || row.source_row != null));
 watch(
 	() => quote.value?.id,
@@ -1059,6 +1188,7 @@ watch(
 		productPage.value = 1;
 		productSearch.value = '';
 		productCategory.value = '';
+		importIssueKind.value = '';
 	}
 );
 function toggleRowSelection(row: QuoteRow, checked: boolean | string | number) {
@@ -1166,7 +1296,8 @@ const selectedRow = computed(() => quote.value?.body.rows[selected.value]),
 const selectedConfidenceReason = computed(() => currentAiConfidenceReason(selectedRow.value, quote.value?.body.ai_review_status));
 const productCategories = computed(() => [...new Set((quote.value?.body.rows || []).map((row) => row.category || '待识别'))]);
 const filteredProductRows = computed(() => {
-	const rows = filterQuoteRows(quote.value?.body.rows || [], productSearch.value, productCategory.value);
+	const rows = filterQuoteRows(quote.value?.body.rows || [], productSearch.value, productCategory.value)
+		.filter(row => !importIssueKind.value || row.import_review?.issues.some(issue => issue.kind === importIssueKind.value));
 	return onlyReviewRows.value ? rows.filter((row) => rowNeedsAttention(originalIndex(row))) : rows;
 });
 const visibleProductRows = computed(() => pageQuoteRows(filteredProductRows.value, productPage.value, productPageSize.value));
@@ -1175,14 +1306,15 @@ const selectableVisibleRows = computed(() => visibleProductRows.value.filter((ro
 const allVisibleSelected = computed(() => !!selectableVisibleRows.value.length && selectableVisibleRows.value.every((row) => selectedRowIds.value.includes(row.row_id!)));
 const someVisibleSelected = computed(() => visibleProductRows.value.some((row) => !!row.row_id && selectedRowIds.value.includes(row.row_id)));
 const scopeCounts = computed(() => quoteScopeCounts(quote.value?.body.rows || [], dirty.value ? [] : quote.value?.result?.rows || [], rowNeedsAttention));
-watch([productSearch, productCategory, onlyReviewRows, productPageSize], () => { productPage.value = 1; });
+watch([productSearch, productCategory, importIssueKind, onlyReviewRows, productPageSize], () => { productPage.value = 1; });
 watch(() => filteredProductRows.value.length, (length) => { productPage.value = Math.min(productPage.value, Math.max(1, Math.ceil(length / productPageSize.value))); });
 const selectedFan = computed(() => selectedResult.value?.detail?.selected_fan);
 const selectedFanDisplayName = computed(() =>
 	[selectedFan.value?.family, selectedFan.value?.model].filter((value, index, values) => value && values.indexOf(value) === index).join(' · ')
 );
 /** 导出入口要求已有结果、正文未修改、结果未过期且未归档；正式导出还需后端检查待确认项目、指标版本及模板许可。 */
-const exportable = computed(() => !!quote.value?.result && !dirty.value && !quote.value?.result_stale && quote.value?.state !== 'archived');
+const exportable = computed(() => !!quote.value?.result && !dirty.value && !quote.value?.result_stale && quote.value?.state !== 'archived'
+	&& (quote.value?.state !== 'draft' || (!regionNeedsSave.value && !projectRegionIssue(quote.value.body))));
 /** 整单费用以后台结果为准；标明已含于行价的法兰、配件、税费和设备运费，避免阅读汇总时重复相加。 */
 const feeLabels = [
 	['equipment_freight', '设备运费'],
@@ -1339,6 +1471,7 @@ function visibleRowNumber(index: number) {
 }
 /** 导入核验提醒显示黄色，试算后的材料或安装待确认显示红色，未试算行不高亮。 */
 function rowClass({ row }: { row: QuoteRow }) {
+	if (row.row_id === locatedAiRowId.value) return 'ai-located-row';
 	if (row.excluded) return 'excluded-row';
 	const state = rowAttention(originalIndex(row));
 	return state === 'pending' ? 'pending-row' : state === 'review' ? 'review-needed-row' : '';
@@ -1459,12 +1592,33 @@ async function navigate(id: string) {
 	await router.push({ path: '/quotation/workbench/index', query: { id } });
 }
 /** 读取服务端当前版本，补齐历史安装字段，再建立正文基线并关闭旧行抽屉，保证后续保存使用最新 revision。 */
+function projectProvinceChanged() {
+	if (!quote.value) return;
+	quote.value.body.project_region_confirmed = !!quote.value.body.project_region;
+	deliveryProvinceChanged();
+}
+function acceptSuggestedProvince() {
+	if (!quote.value || quote.value.body.project_region_suggestions?.length !== 1) return;
+	quote.value.body.project_region = quote.value.body.project_region_suggestions[0];
+	projectProvinceChanged();
+}
+function deliveryProvinceChanged() {
+	if (!quote.value) return;
+	if (hasManualRegionPrices(quote.value.body) || quote.value.result?.manual_review_import) quote.value.body.region_prices_confirmed = false;
+	syncProjectRegion(quote.value.body);
+	ElMessage.info({ message: '地区已更新，请保存并重新试算', grouping: true });
+}
 async function loadQuote(id: string) {
-	applyQuote(await quoteApi.detail(id));
+	const request = ++quoteLoadRequest;
+	const value = await quoteApi.detail(id);
+	if (request !== quoteLoadRequest) return;
+	applyQuote(value);
 }
 /** 详情读取、保存和试算均应用同一份服务端权威正文，保持行 ID、核验状态和修改基线一致。 */
 function applyQuote(value: Quote) {
+	regionNeedsSave.value = value.body.project_region === undefined;
 	prepareInstallation(value.body);
+	prepareProjectRegion(value.body);
 	value.body.rows.forEach((row) => { row.installation_only ??= false; });
 	reviewSnapshot.value = updateReviewSnapshot(reviewSnapshot.value, value);
 	quote.value = value;
@@ -1474,7 +1628,7 @@ function applyQuote(value: Quote) {
 async function applyMutation(target: Quote, response: QuoteMutationResult | undefined, calculated: boolean) {
 	if (quote.value !== target) return false;
 	if (response?.body && response.state && typeof response.result_stale === 'boolean' && (!calculated || response.result)) {
-		applyQuote({ ...target, ...response, body: response.body, state: response.state, result: calculated ? response.result! : null, result_stale: response.result_stale });
+		applyQuote({ ...target, ...response, body: response.body, state: response.state, result: response.result ?? null, result_stale: response.result_stale });
 	} else {
 		// 兼容尚未更新的后端；仅此时补读详情。保存成功即清除旧结果，详情失败也不能沿用旧价格。
 		if (response) target.revision = response.revision;
@@ -1508,22 +1662,32 @@ async function productRulesChanged() {
 		report(error);
 	}
 }
-/** 并行加载各类指标和产品规则，再按路由读取报价；没有编号时显示列表入口，失败时显式提示。 */
+const catalogsLoaded = ref(false);
+/** 列表由 QuoteList 读取摘要；打开具体报价后才加载完整指标、规则和清单。 */
 async function initialize() {
+	const request = ++initializeRequest;
+	++quoteLoadRequest;
+	const id = route.query.id ? String(route.query.id) : '';
 	busy.value = true;
 	failed.value = false;
+	if (!id) {
+		quote.value = undefined;
+		reviewSnapshot.value = undefined;
+		busy.value = false;
+		return;
+	}
 	try {
-		[catalogs.value] = await Promise.all([quoteApi.resources(), refreshProductRules()]);
-		if (route.query.id) await loadQuote(String(route.query.id));
-		else {
-			quote.value = undefined;
-			reviewSnapshot.value = undefined;
-		}
+		const [resources] = await Promise.all([quoteApi.resources(), refreshProductRules()]);
+		if (request !== initializeRequest) return;
+		catalogs.value = resources;
+		catalogsLoaded.value = true;
+		await loadQuote(id);
 	} catch (error) {
+		if (request !== initializeRequest) return;
 		failed.value = true;
 		report(error);
 	} finally {
-		busy.value = false;
+		if (request === initializeRequest) busy.value = false;
 	}
 }
 /** 新建 auto_v1 空白草稿并进入工作台，保存后由引擎按行识别产品，不要求整单预选类型。 */
@@ -1541,6 +1705,10 @@ async function createBlank() {
 /** 保存可选地继续试算：应用权威正文与修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
 async function save(calculate: boolean) {
 	if (!quote.value || saving.value) return false;
+	if (calculate && projectRegionIssue(quote.value.body)) {
+		ElMessage.warning(projectRegionIssue(quote.value.body));
+		return false;
+	}
 	if (calculate && aiReviewRequired.value) {
 		ElMessage.warning('请先人工核验AI清单');
 		return false;
@@ -1549,12 +1717,20 @@ async function save(calculate: boolean) {
 		ElMessage.warning('请先选择整单是否含运费');
 		return false;
 	}
+	const targetId = quote.value.id;
+	const targetRevision = quote.value.revision;
+	const replaceManualReview = calculate && !!(quote.value.result?.manual_review_import || quote.value.body.manual_review_snapshot?.requires_confirmation);
+	if (replaceManualReview) {
+		try { await confirm('本单包含人工校对价格。重新试算会按系统规则替换人工结果，原人工价格将保留供核对。确认重新试算？'); }
+		catch { return false; }
+		if (quote.value?.id !== targetId || quote.value.revision !== targetRevision || saving.value) return false;
+	}
 	saving.value = true;
 	busy.value = true;
 	try {
 		const id = quote.value.id;
 		/** 修改正文后重新保存会使旧试算失效；按服务端返回的核验状态决定是否继续计算。 */
-		if (dirty.value || quote.value.body.ai_review_status !== 'approved') {
+		if (dirty.value || regionNeedsSave.value) {
 			const target = quote.value;
 			const saved = await quoteApi.save(id, target.body, target.revision);
 			if (!(await applyMutation(target, saved, false))) return false;
@@ -1565,7 +1741,7 @@ async function save(calculate: boolean) {
 				return false;
 			}
 			const target = quote.value;
-			const result = await quoteApi.calculate(id, target.revision);
+			const result = await quoteApi.calculate(id, target.revision, replaceManualReview);
 			if (!(await applyMutation(target, result, true))) return false;
 		}
 		ElMessage.success(calculate ? (quote.value.result?.formal_ready ? '试算完成，可以生成正式报价' : '试算完成，请核对待确认项') : '草稿已保存');
@@ -1581,6 +1757,7 @@ async function save(calculate: boolean) {
 /** 一次确认后按当前修订保存、记录人工核验并试算；未修改且已核验时直接试算，失败不会继续后续步骤。 */
 async function approveAi() {
 	if (!quote.value || locked.value || !quote.value.body.ai_review_status || busy.value || saving.value || reviewingAi.value) return;
+	if (projectRegionIssue(quote.value.body)) { ElMessage.warning(projectRegionIssue(quote.value.body)); return; }
 	if (quote.value.body.include_freight == null) {
 		ElMessage.warning('请先选择整单是否含运费');
 		return;
@@ -1591,13 +1768,13 @@ async function approveAi() {
 	// 等待人工确认时仅防重复点击；提交请求后再显示加载遮罩，避免遮住确认按钮。
 	reviewingAi.value = true;
 	try {
-		if (aiReviewRequired.value) {
+		if (aiReviewRequired.value || regionNeedsSave.value) {
 			await confirm('请确认已对照客户原始资料核对全部AI清单行，包括遗漏、规格、数量和单位。确认后将保存本次修改、记录人工核验并自动试算。');
 			if (!quote.value || quote.value.id !== id || quote.value.revision !== revision || JSON.stringify(quote.value.body) !== reviewedBody) {
 				ElMessage.warning('核验期间内容已变化，请核对当前内容后重新确认');
 				return;
 			}
-			if (dirty.value && !(await save(false))) return;
+			if ((dirty.value || regionNeedsSave.value) && !(await save(false))) return;
 			busy.value = true;
 			if (!quote.value || quote.value.id !== id || locked.value) return;
 			await quoteApi.approveAi(id, quote.value.revision);
@@ -1666,7 +1843,7 @@ async function previewAiInputFile(event: Event) {
 	}
 }
 
-/** 确认预览后再次检查报价 ID、revision 和页面未保存状态，避免把旧文件覆盖新草稿；更新原单后仍需重新人工核验再试算。 */
+/** 确认差异后核对报价ID、revision及未保存状态，统一更新、记录核验并试算，再打开可重复查看的结果。 */
 async function applyAiInputFile() {
 	if (!quote.value || !aiInputPreview.value?.change_count || !aiInputTarget.value || locked.value || aiInputBusy.value) return;
 	if (dirty.value || quote.value.id !== aiInputTarget.value.id || quote.value.revision !== aiInputTarget.value.revision) {
@@ -1676,10 +1853,11 @@ async function applyAiInputFile() {
 	aiInputBusy.value = true;
 	aiInputError.value = '';
 	try {
-		await quoteApi.applyAiInputImport(aiInputTarget.value.id, aiInputTarget.value.revision, aiInputPreview.value.import_id);
+		await quoteApi.applyAiInputImport(aiInputTarget.value.id, aiInputTarget.value.revision, aiInputPreview.value.import_id, true);
 		aiInputDialog.value = false;
 		await loadQuote(aiInputTarget.value.id);
-		ElMessage.success('已校验清单已更新到原草稿，请点击“核验完成并试算”');
+		excelResultDialog.value = true;
+		ElMessage.success('Excel修改已更新并统一试算，请查看各行结果');
 	} catch (error) {
 		const detail = error as { msg?: string; message?: string };
 		aiInputError.value = detail?.msg || detail?.message || '更新草稿失败，请刷新草稿后重新上传';
@@ -1774,6 +1952,7 @@ async function previewReviewFile(event: Event) {
 	busy.value = true;
 	try {
 		reviewPreview.value = await quoteApi.previewReviewImport(quote.value.id, quote.value.revision, file);
+		keepSystemLocation.value = false;
 		restoreScopeRowIds.value = [];
 		reviewDialog.value = true;
 	} catch (error) {
@@ -1786,12 +1965,16 @@ async function previewReviewFile(event: Event) {
 /** 把确认的人工价格回导应用到当前修订版，读取重新汇总的材料、安装和整单结果，并提示是否仍有待确认项。 */
 async function applyReviewFile() {
 	if (!quote.value || !reviewPreview.value?.change_count || !allScopeRestorationsConfirmed.value) return;
+	if (reviewPreview.value.location_changed && !keepSystemLocation.value) return;
 	busy.value = true;
 	try {
-		await quoteApi.applyReviewImport(quote.value.id, quote.value.revision, reviewPreview.value.import_id, restoreScopeRowIds.value);
+		await quoteApi.applyReviewImport(quote.value.id, quote.value.revision, reviewPreview.value.import_id, restoreScopeRowIds.value, keepSystemLocation.value);
 		reviewDialog.value = false;
 		await loadQuote(quote.value.id);
-		ElMessage.success(quote.value.result?.formal_ready ? '人工报价已回导，可以生成正式报价' : '人工报价已回导，仍有项目需要确认');
+		if (reviewPreview.value?.input_recalculated) {
+			excelResultDialog.value = true;
+			ElMessage.success('Excel参数已更新并重新试算，请查看各行结果');
+		} else ElMessage.success(quote.value.result?.formal_ready ? '人工报价已回导，可以生成正式报价' : '人工报价已回导，仍有项目需要确认');
 	} catch (error) {
 		report(error);
 	} finally {
@@ -1836,10 +2019,19 @@ onMounted(() => {
 	initialize();
 	window.addEventListener('beforeunload', beforeUnload);
 });
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
+onBeforeUnmount(() => {
+	++initializeRequest;
+	++quoteLoadRequest;
+	window.removeEventListener('beforeunload', beforeUnload);
+});
 </script>
 
 <style scoped>
+:deep(.q-table .ai-located-row > td.el-table__cell) {
+	background: var(--el-color-primary-light-9);
+	border-top: 2px solid var(--el-color-primary);
+	border-bottom: 2px solid var(--el-color-primary);
+}
 /* 工作台行参数抽屉、风机候选与原始来源/计算明细的局部布局，使人工核对时能同时查看需求和选型结果。 */
 .ai-input-changes {
 	margin-top: 12px;

@@ -1,7 +1,8 @@
+import { reactive } from 'vue';
 import type { EquipmentMechanismDetail } from '/@/types/quotation';
 
 /** 设备计价类型及中文字段字典，供设备指标维护、报价行参数和产品规则编辑共用；编码对应后端已有成本模型。 */
-export const equipmentKinds: Record<string, string> = {
+export const equipmentKinds: Record<string, string> = reactive({
 	fan: '风机',
 	fire: '防火阀',
 	electric_fire: '电动防火阀',
@@ -16,14 +17,14 @@ export const equipmentKinds: Record<string, string> = {
 	plenum: '静压箱 / 接管箱',
 	elbow: '消声弯头',
 	purchased: '外购设备',
-};
+});
 /** 客户清单的产品类别用于选择参数组；具体成本算法还由 equipment_kind 与产品规则共同确定。 */
 export const equipmentCategories = ['风管', '风机', '风阀', '百叶风口', '消声设备', '外购设备', '其他材料'];
 /** 设备成本、毛利、税费、运费门槛等指标的中文说明，帮助负责人核对已发布指标的业务含义。 */
 export const equipmentRates: Record<string, string> = {
 	gross_margin: '毛利率',
 	tax_factor: '含税系数',
-	round_factor: '圆形设备系数',
+	round_factor: '圆形风口 / 消声器 / 静压箱售价系数（不含圆阀）',
 	valve_steel: '阀体材料吨价（元/吨）',
 	fire_150_steel: '150°防火阀旧单价（材质未确认，仅历史参考，元/吨）',
 	fire_150_201_steel: '150°防火阀201不锈钢专用吨价（元/吨）',
@@ -40,17 +41,17 @@ export const equipmentRates: Record<string, string> = {
 	fire_splice: '防火 / 电动阀每次拼接成本',
 	manual_splice: '手动调节阀每次拼接成本',
 	check_splice: '止回阀拼接费（固定为 0）',
-	remote_extra: '其他产品旧远控附加成本（本次三类不使用）',
-	valve_remote_extra: '防火阀 / 板式 / 正压远控附加（40元/机构）',
-	fire_auto_extra: '防火阀全自动附加（150元/机构）',
-	near_control: '板式排烟口近控机构成本',
+	remote_extra: '其他阀类远控附加成本（元/台，不含防火阀、板式及正压送风口）',
+	valve_remote_extra: '防火阀 / 板式 / 正压远控附加（元/机构）',
+	fire_auto_extra: '防火阀全自动附加（元/机构）',
+	near_control: '板式排烟口基础机构成本（元/机构）',
 	remote_control: '旧板式远控基础成本（本次规则不使用）',
 	auto_control: '旧板式自动机构成本（板式不再支持全自动）',
 	panel_rate: '面板成本（元/㎡）',
 	panel_edge: '面板尺寸增加（mm）',
 	silencer_rate: '消声器成本（元/㎡）',
 	plenum_rate: '静压箱成本（元/㎡）',
-	double_layer_rate: '双层成本（元/㎡）',
+	double_layer_rate: '双层消声器 / 静压箱统一成本（元/㎡，不分地区）',
 	silencer_edge: '消声器每边增加（mm）',
 	elbow_taxed_rate: '消声弯头固定含税价（元/㎡）',
 	freight_threshold: '人工运费行金额门槛（元）',
@@ -80,6 +81,7 @@ export const equipmentComponents: Record<string, string> = {
 	mechanism: '机构（基础成本 + 适用控制方式附加）',
 	splice: '拼接',
 	panel: '面板',
+	round_processing: '圆阀加工费（完整成本的30%）',
 };
 /** 设备及风机本体公式变量的中文含义与单位；显示转换保持原英文表达式和实际计算规则不变。 */
 export const equipmentVariables: Record<string, string> = {
@@ -138,7 +140,7 @@ export interface EquipmentField {
 }
 
 /** 可供设备报价录入的完整参数集合，含风机工况、阀体成本和附阀核验条件；实际页面按产品类别筛选显示。 */
-export const equipmentFields: EquipmentField[] = [
+export const equipmentFields: EquipmentField[] = reactive([
 	{ key: 'equipment_kind', label: '计算类型', choices: Object.entries(equipmentKinds) },
 	{ key: 'width', label: '宽度（mm）' },
 	{ key: 'height', label: '高度（mm）' },
@@ -155,6 +157,9 @@ export const equipmentFields: EquipmentField[] = [
 		],
 	},
 	{ key: 'model', label: '需求型号' },
+	{ key: 'position_tag', label: '客户原位号' },
+	{ key: 'installation_description', label: '安装要求（不作为独立产品）' },
+	{ key: 'source_total_area', label: '客户箱体总面积（㎡，仅核对）' },
 	{
 		key: 'purchased_type',
 		label: '外购换气扇类型',
@@ -282,22 +287,24 @@ export const equipmentFields: EquipmentField[] = [
 		],
 	},
 	{ key: 'attached_valve_thickness', label: '附阀板厚（mm）' },
-];
+]);
 
 /** 建立参数索引及类别映射，复用同一字段定义生成风机、风阀、风口、消声和外购产品的表单。 */
-const equipmentFieldByKey = new Map(equipmentFields.map((field) => [field.key, field]));
-const kindsByCategory: Record<string, string[]> = {
+const equipmentFieldByKey = reactive(new Map(equipmentFields.map((field) => [field.key, field])));
+const kindsByCategory: Record<string, string[]> = reactive({
 	风机: ['fan'],
 	风阀: ['fire', 'electric_fire', 'electric_control', 'manual', 'check', 'pressure_relief', 'multi_leaf', 'plate_smoke'],
 	百叶风口: ['louver'],
 	消声设备: ['silencer', 'plenum', 'elbow'],
 	外购设备: ['purchased'],
 	其他材料: ['purchased'],
-};
-const fieldsByCategory: Record<string, string[]> = {
+});
+const fieldsByCategory: Record<string, string[]> = reactive({
 	风机: [
 		'equipment_kind',
 		'model',
+		'position_tag',
+		'installation_description',
 		'size',
 		'power',
 		'airflow',
@@ -360,11 +367,12 @@ const fieldsByCategory: Record<string, string[]> = {
 		'layer',
 		'flange',
 		'area_per_unit',
+		'source_total_area',
 		'area_cost',
 	],
 	外购设备: ['equipment_kind', 'model', 'purchased_type'],
 	其他材料: ['equipment_kind', 'model', 'purchased_type'],
-};
+});
 
 /** 仅显示选定产品类别所需的参数；隐藏字段的已有值仍保留在 attributes 中。 */
 /** 按产品类别和具体成本算法选择需要填写的参数，并限制可选计算类型。消声弯头使用人工面积，其他消声设备使用尺寸；隐藏字段仍留在 attributes 中。 */
@@ -378,6 +386,7 @@ export function equipmentFieldsFor(category: string, kind = '', productName = ''
 	if (controlChoices) keys = keys.filter((key) => key !== 'remote');
 	if (category === '消声设备' && kind === 'elbow') keys = ['equipment_kind', 'area_per_unit'];
 	else if (category === '消声设备' && ['silencer', 'plenum'].includes(kind)) keys = keys.filter((key) => key !== 'area_per_unit');
+	if (kind !== 'plenum') keys = keys.filter((key) => key !== 'source_total_area');
 	if (kind && !['fire', 'electric_fire'].includes(kind)) keys = keys.filter((key) => key !== 'valve_material_variant');
 	const allowedKinds = kindsByCategory[category];
 	return keys.flatMap((key) => {
@@ -415,9 +424,9 @@ export function equipmentControlChoices(kind: string, productName = ''): string[
 	if (!fire && !plate && !pressure) return;
 	const choices = [
 		['near', plate ? '近控基础机构（默认）' : '基础机构（默认）'],
-		['remote', '远控（基础 + 40元/机构）'],
+		['remote', '远控（附加费用按生效指标计算）'],
 	];
-	if (fire) choices.push(['auto', '全自动（基础 + 150元/机构）']);
+	if (fire) choices.push(['auto', '全自动（附加费用按生效指标计算）']);
 	return choices;
 }
 
@@ -443,4 +452,22 @@ export function mechanismCostExplanation(detail?: EquipmentMechanismDetail): str
 	const count = detail?.mechanism_count == null ? '' : String(detail.mechanism_count).trim();
 	const formula = detail?.component_formulas?.mechanism?.trim();
 	return [count ? `每件机构数 N = ${count}` : '', formula ? `机构成本（每件）：${formula} 元` : ''].filter(Boolean).join('；');
+}
+
+/** 后端登记为权威来源；上面的字段仅兼容尚未升级的服务及离线表单。 */
+export interface EquipmentParameterDefinitions {
+ fields: EquipmentField[];
+ fields_by_category: Record<string, string[]>;
+ kinds_by_category: Record<string, string[]>;
+ kinds: Record<string, string>;
+}
+export function configureEquipmentParameters(definitions: EquipmentParameterDefinitions) {
+ if (!definitions?.fields?.length) return;
+ equipmentFields.splice(0, equipmentFields.length, ...definitions.fields);
+ equipmentFieldByKey.clear();
+ for (const field of equipmentFields) equipmentFieldByKey.set(field.key, field);
+ for (const key of Object.keys(fieldsByCategory)) delete fieldsByCategory[key];
+ Object.assign(fieldsByCategory, definitions.fields_by_category);
+ Object.assign(kindsByCategory, definitions.kinds_by_category);
+ Object.assign(equipmentKinds, definitions.kinds);
 }

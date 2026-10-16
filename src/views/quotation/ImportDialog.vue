@@ -5,7 +5,7 @@
 			<div class="upload-area">
 				<div>
 					<strong>上传清单，自动匹配列</strong>
-					<p>支持 Excel 多工作表，风管与设备合并为一张报价单。</p>
+					<p>按项目名称和独立规格列识别，项目特征描述仅保留备查；试算失败后可选择AI辅助识别并重新试算。</p>
 				</div>
 				<input type="file" accept=".xlsx,.xls" :disabled="busy" aria-label="选择客户清单" @change="upload" />
 			</div>

@@ -1,5 +1,7 @@
 /** 报价系统 HTTP 接口集中封装：复用 pig 登录与请求处理，统一使用 /admin/quotation 路径；版本变更请求携带 revision 供后端检查并发修改。 */
 import request from '/@/utils/request';
+import { configureEquipmentParameters } from '/@/views/quotation/equipment';
+import type { EquipmentParameterDefinitions } from '/@/views/quotation/equipment';
 import type {
 	Catalog,
 	CatalogBody,
@@ -23,6 +25,8 @@ import type {
 	DuctOptions,
 	InstallationOptions,
 	AiImportJob,
+	AiImportLimits,
+	AiRetryReport,
 } from '/@/types/quotation';
 
 /** 后端统一响应外层，业务数据位于 data；成功与错误处理继续遵循公共 request 拦截器。 */
@@ -41,11 +45,20 @@ export interface QuoteMutationResult {
 }
 const base = '/admin/quotation';
 /** 发送普通 JSON 报价请求并提取业务 data；文件上传和下载需要单独设置 multipart 或 blob，因此在各方法中处理。 */
-async function call<T>(path: string, method = 'get', data?: unknown): Promise<T> {
-	const response = (await request({ url: base + path, method, data })) as unknown as Result<T>;
+async function call<T>(path: string, method = 'get', data?: unknown, timeout?: number): Promise<T> {
+	const response = (await request({ url: base + path, method, data, ...(timeout ? { timeout } : {}) })) as unknown as Result<T>;
 	return response.data;
 }
 export const quoteApi = {
+	aiRetry: (id: string, revision: number, rowIds: string[], includeFeatures = false, reportId?: string) =>
+		call<{ revision: number; report: AiRetryReport; request_error: string }>(`/quotes/${id}/ai-retry`, 'post',
+			{ revision, row_ids: rowIds, include_features: includeFeatures, report_id: reportId }, 1230000),
+	applyAiRetry: (id: string, revision: number, reportId: string, rowIds: string[], undo = false, replaceManualReview = false) =>
+		call<QuoteMutationResult>(`/quotes/${id}/ai-retry/apply`, 'post',
+			{ revision, report_id: reportId, row_ids: rowIds, undo, replace_manual_review: replaceManualReview }, 120000),
+	aiAssist: (id: string, revision: number, rowIds: string[]) => call<{ revision: number; suggestions: {
+		row_id: string; current_name: string; name: string; evidence: string; source_field: string; message: string; verified: boolean;
+	}[] }>(`/quotes/${id}/ai-assist`, 'post', { revision, row_ids: rowIds }, 1230000),
 	/** 查询可见产品规则版本，包含草稿、发布与停用状态，供行匹配和通用管理使用。 */
 	productRules: () => call<Catalog<ProductRuleBody>[]>('/product-rules'),
 	/** 对当前客户行读取模板、候选规则及推荐理由；只提供建议，不自动选择、发布或保存。 */
@@ -57,9 +70,17 @@ export const quoteApi = {
 			duct_options: quote?.duct_options,
 			equipment_options: quote?.equipment_options,
 			context_rows: quote?.rows,
+			project_region: quote?.project_region,
+			project_region_confirmed: quote?.project_region_confirmed,
+			different_delivery_region: quote?.different_delivery_region,
+			delivery_region: quote?.delivery_region,
 		}),
 	/** 以本行参数和整单条件试算规则，返回未完成原因或逐步成本明细，不写入报价与共用规则。 */
 	trialProductRule: (data: {
+		project_region?: string;
+		project_region_confirmed?: boolean;
+		different_delivery_region?: boolean;
+		delivery_region?: string;
 		body: ProductRuleBody;
 		row: QuoteRow;
 		equipment_options?: EquipmentOptions;
@@ -77,11 +98,16 @@ export const quoteApi = {
 	productRuleAction: (item: Catalog<ProductRuleBody>, action: 'revise' | 'trial' | 'publish' | 'retire' | 'delete') =>
 		call<{ id?: string; revision?: number; message?: string }>('/product-rules/' + item.id + '/' + action, 'post', { revision: item.revision }),
 	/** 查询风管、设备与安装等指标版本；泛型用于各面板读取对应正文结构。 */
-	resources: <T = CatalogBody>() => call<Catalog<T>[]>('/resources'),
+	resources: async <T = CatalogBody>() => {
+		const [resources, settings] = await Promise.all([call<Catalog<T>[]>('/resources'), call<QuoteSettings & { parameter_definitions?: EquipmentParameterDefinitions }>('/settings')]);
+		if (settings.parameter_definitions) configureEquipmentParameters(settings.parameter_definitions);
+		return resources;
+	},
 	/** 读取已核对安装源表的草稿正文，仅返回基准数据，不在此方法中创建或发布指标。 */
 	installationSeed: () => call<InstallationCatalogBody>('/installation/catalog-seed'),
 	/** 读取已核对设备源表的草稿正文，交由负责人核对后保存和发布。 */
 	equipmentSeed: () => call<EquipmentCatalogBody>('/equipment/catalog-seed'),
+	acousticRegionCosts: () => call<NonNullable<EquipmentCatalogBody['acoustic_region_costs']>>('/equipment/acoustic-region-costs'),
 	/** 初始化风管基价草稿并返回资源 ID，仍需负责人检查后发布。 */
 	seed: () => call<{ id: string }>('/resources/seed', 'post', {}),
 	/** 保存指标草稿正文与修订号，已发布指标的只读约束由后端验证。 */
@@ -106,11 +132,11 @@ export const quoteApi = {
 	/** 读取指定报价版本正文、上次试算、结果过期标志及历史导出记录。 */
 	detail: (id: string) => call<Quote>('/quotes/' + id),
 	/** 手工或按导入计划创建新报价草稿，返回编号供工作台打开。 */
-	create: (data: Record<string, unknown> = {}) => call<{ id: string }>('/quotes', 'post', data),
+	create: (data: Record<string, unknown> = {}) => call<{ id: string }>('/quotes', 'post', { project_region: '', project_region_confirmed: false, different_delivery_region: false, delivery_region: '', ...data }),
 	/** 保存报价正文与当前修订号，后端生成/保留行标识并使旧结果失效。 */
 	save: (id: string, body: QuoteBody, revision: number) => call<QuoteMutationResult>('/quotes/' + id, 'put', { ...body, revision }),
 	/** 基于已经保存的版本试算整单，返回计算结果和新修订号，待确认项目由引擎显式保留。 */
-	calculate: (id: string, revision: number) => call<QuoteMutationResult>('/quotes/' + id + '/calculate', 'post', { revision }),
+	calculate: (id: string, revision: number, replaceManualReview = false) => call<QuoteMutationResult>('/quotes/' + id + '/calculate', 'post', { revision, replace_manual_review: replaceManualReview }),
 	/** 执行报价修订、归档、恢复或删除等状态动作，修订可能返回新报价编号。 */
 	action: (id: string, revision: number, action: string) => call<{ id?: string }>('/quotes/' + id + '/' + action, 'post', { revision }),
 	/** 重新识别已保存草稿中的产品行，返回风管、设备和待识别数量，不补入未导入的工作表。 */
@@ -152,12 +178,14 @@ export const quoteApi = {
 			url: base + '/ai-imports',
 			method: 'post',
 			params: { action: 'next', jobId },
-			timeout: 180000,
+			timeout: 30000,
 		})) as unknown as Result<AiImportJob>;
 		return response.data;
 	},
 	aiImportStatus: (jobId: string) => call<AiImportJob>('/ai-imports?jobId=' + encodeURIComponent(jobId)),
 	aiImportJobs: () => call<AiImportJob[]>('/ai-imports'),
+	aiImportLimits: () => call<AiImportLimits>('/ai-import-limits'),
+	pauseAiImport: (jobId: string) => call<AiImportJob>('/ai-imports?action=pause&jobId=' + encodeURIComponent(jobId), 'post'),
 	cancelAiImport: (jobId: string) => call<AiImportJob>('/ai-imports?action=cancel&jobId=' + encodeURIComponent(jobId), 'post'),
 	/** 下载绑定当前 AI 草稿版本的待核验 Excel；若 blob 实际为 JSON 错误，先解析业务提示，下载完成后回收对象 URL。 */
 	async downloadStandardInput(id: string) {
@@ -186,9 +214,9 @@ export const quoteApi = {
 		})) as unknown as Result<AiInputImportPreview>;
 		return response.data;
 	},
-	/** 人工确认预览后应用回导到原 AI 草稿，更新输入并恢复待核验状态，随后需要再次确认才能试算。 */
-	applyAiInputImport: (id: string, revision: number, importId: string) =>
-		call<{ revision: number }>(`/quotes/${id}/ai-input-imports/${importId}/apply`, 'post', { revision, review_confirmed: true }),
+	/** 应用人工确认的清单修改；recalculate 明确要求记录核验并统一试算，默认兼容只更新草稿。 */
+	applyAiInputImport: (id: string, revision: number, importId: string, recalculate = false) =>
+		call<{ revision: number }>(`/quotes/${id}/ai-input-imports/${importId}/apply`, 'post', { revision, review_confirmed: true, recalculate }),
 	/** 按客户资料索引下载原始附件，后端验证报价可见性；保留指定文件名并回收临时 URL。 */
 	async downloadAiSource(id: string, index: number, filename: string) {
 		const blob = (await request({ url: `${base}/quotes/${id}/ai-sources/${index}`, method: 'get', responseType: 'blob' })) as unknown as Blob;
@@ -220,10 +248,11 @@ export const quoteApi = {
 		return response.data;
 	},
 	/** 按导入预览编号和报价修订号应用人工价格，返回重新汇总结果与新修订号。 */
-	applyReviewImport: (id: string, revision: number, importId: string, restoreScopeRowIds: string[] = []) =>
+	applyReviewImport: (id: string, revision: number, importId: string, restoreScopeRowIds: string[] = [], keepSystemLocation = false) =>
 		call<{ result: QuoteResult; revision: number }>(`/quotes/${id}/review-imports/${importId}/apply`, 'post', {
 			revision,
 			restore_scope_row_ids: restoreScopeRowIds,
+			keep_system_location: keepSystemLocation,
 		}),
 	/** 负责人查询报价与指标操作审计，用于追溯执行人员、目标及时间。 */
 	audit: () => call<{ id: string; actor_name: string; action: string; target: string; created_at: string }[]>('/audit'),

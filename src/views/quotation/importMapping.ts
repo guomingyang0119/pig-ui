@@ -107,6 +107,7 @@ export function mappingGroups(
 		['remark', '备注'],
 	];
 	const commonExtra: Field[] = [
+		['feature_description', '项目特征描述（仅备查）'],
 		['model', '型号 / 尺寸（独立列）'],
 		[secondQuantity, secondQuantity === 'quantity' ? '设备数量（另有一列时）' : '面积 / 工程量（另有一列时）'],
 		['category', '品类'],
