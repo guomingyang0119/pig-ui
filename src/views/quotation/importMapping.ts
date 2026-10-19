@@ -14,7 +14,9 @@ export interface MappingGroup {
 }
 /** 从确认的起始行统计风管、设备、未知产品及上下文行，并取前五条产品形成预览。已识别的楼层、区域等说明行不参与产品计数。 */
 export function analyseSheet(sheet: ImportSheet, start: number | undefined, mapping: ColumnMapping) {
-	const context = new Set((sheet.auto_context_rows || []).map((r) => r.number));
+	const contextMayDiffer = !!sheet.auto_context_rows?.length && !!sheet.auto_mapping &&
+		Object.keys({ ...sheet.auto_mapping, ...mapping }).some(key => (sheet.auto_mapping?.[key] ?? null) !== (mapping[key] ?? null));
+	const context = new Set((contextMayDiffer ? [] : sheet.auto_context_rows || []).map((r) => r.number));
 	const counts = { duct: 0, equipment: 0, unknown: 0, context: 0 };
 	const rows = sheet.rows.filter((r) => start && r.number >= start);
 	const preview = [];
@@ -42,7 +44,7 @@ export function analyseSheet(sheet: ImportSheet, start: number | undefined, mapp
 				kind: kind === 'duct' ? '风管' : kind === 'equipment' ? '设备' : '待识别',
 			});
 	}
-	return { ...counts, total: counts.duct + counts.equipment + counts.unknown, preview };
+	return { ...counts, total: counts.duct + counts.equipment + counts.unknown, preview, contextMayDiffer };
 }
 
 /** 尺寸与材质可能由风管、设备共用；专属字段分别放入对应参数组，减少重复映射。 */

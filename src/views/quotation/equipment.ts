@@ -30,15 +30,15 @@ export const equipmentRates: Record<string, string> = {
 	fire_150_201_steel: '150°防火阀201不锈钢专用吨价（元/吨）',
 	fire_150_304_steel: '150°防火阀304不锈钢专用吨价（元/吨）',
 	density: '材料密度换算',
-	split_width: '拆分宽度界限（mm）',
-	split_height: '拆分高度界限（mm）',
+	split_width: '拆分长边界限（mm）',
+	split_height: '拆分短边界限（mm）',
 	pressure_supply_split_height: '正压送风口大尺寸整体高度界限（mm）',
 	pressure_supply_mechanism_width: '正压送风口加机构宽度界限（mm）',
 	pressure_supply_panel_rate: '正压送风口面板成本（元/㎡）',
 	pressure_supply_mechanism: '正压送风口每套基础机构成本（元）',
-	splice_width: '拼接宽度每段尺寸（mm）',
-	splice_height: '拼接高度每段尺寸（mm）',
-	fire_splice: '防火 / 电动阀每次拼接成本',
+	splice_width: '拼接长边每段尺寸（mm）',
+	splice_height: '拼接短边每段尺寸（mm）',
+	fire_splice: '防火 / 电动阀及正压送风口每次机构拼接成本',
 	manual_splice: '手动调节阀每次拼接成本',
 	check_splice: '止回阀拼接费（固定为 0）',
 	remote_extra: '其他阀类远控附加成本（元/台，不含防火阀、板式及正压送风口）',
@@ -142,9 +142,9 @@ export interface EquipmentField {
 /** 可供设备报价录入的完整参数集合，含风机工况、阀体成本和附阀核验条件；实际页面按产品类别筛选显示。 */
 export const equipmentFields: EquipmentField[] = reactive([
 	{ key: 'equipment_kind', label: '计算类型', choices: Object.entries(equipmentKinds) },
-	{ key: 'width', label: '宽度（mm）' },
-	{ key: 'height', label: '高度（mm）' },
-	{ key: 'length', label: '长度（mm）' },
+	{ key: 'width', label: '长边（mm；正压为宽）' },
+	{ key: 'height', label: '短边（mm；正压为高）' },
+	{ key: 'length', label: '独立长度（mm）' },
 	{ key: 'diameter', label: '圆形直径（mm）' },
 	{ key: 'thickness', label: '板厚（mm）' },
 	{ key: 'blade_thickness', label: '叶片厚度（mm）' },
@@ -255,8 +255,8 @@ export const equipmentFields: EquipmentField[] = reactive([
 			['check', '止回阀'],
 		],
 	},
-	{ key: 'attached_valve_width', label: '附阀宽度（mm）' },
-	{ key: 'attached_valve_height', label: '附阀高度（mm）' },
+	{ key: 'attached_valve_width', label: '附阀长边（mm）' },
+	{ key: 'attached_valve_height', label: '附阀短边（mm）' },
 	{ key: 'attached_valve_diameter', label: '附阀直径（mm，与宽高二选一）' },
 	{ key: 'attached_valve_count', label: '每台风机附阀数量' },
 	{
@@ -392,6 +392,10 @@ export function equipmentFieldsFor(category: string, kind = '', productName = ''
 	return keys.flatMap((key) => {
 		const field = equipmentFieldByKey.get(key);
 		if (!field) return [];
+		if (key === 'width' || key === 'height') {
+			const pressure = kind === 'multi_leaf' && !!controlChoices;
+			return [{ ...field, label: key === 'width' ? (pressure ? '宽（mm）' : '长边（mm，大值）') : (pressure ? '整体高（mm）' : '短边（mm，小值）') }];
+		}
 		if (key === 'material' && fire150)
 			return [
 				{
@@ -418,7 +422,7 @@ export function equipmentControlChoices(kind: string, productName = ''): string[
 	const pressure =
 		kind === 'multi_leaf' &&
 		!productName.includes('板式排烟') &&
-		['正压送风口', '正压送风阀', '多叶排烟', '电动百叶风口', '多叶加压送风口', '加压送风口', '多叶送风口', '组合送风口'].some((name) =>
+		['正压送风口', '正压送风阀', '多叶排烟', '电动百叶风口', '多叶加压送风', '加压送风口', '多叶送风口', '组合送风口'].some((name) =>
 			productName.includes(name)
 		);
 	if (!fire && !plate && !pressure) return;
@@ -451,6 +455,8 @@ export function equipmentParameterValue(attributes: Record<string, string>, key:
 export function mechanismCostExplanation(detail?: EquipmentMechanismDetail): string {
 	const count = detail?.mechanism_count == null ? '' : String(detail.mechanism_count).trim();
 	const formula = detail?.component_formulas?.mechanism?.trim();
+	if (detail?.single_base_mechanism)
+		return ['基础机构每件计1次', count ? `控制附加计费份数 = ${count}（拼接次数＋1）` : '', formula ? `机构成本（每件）：${formula} 元；机构拼接费另列` : ''].filter(Boolean).join('；');
 	return [count ? `每件机构数 N = ${count}` : '', formula ? `机构成本（每件）：${formula} 元` : ''].filter(Boolean).join('；');
 }
 

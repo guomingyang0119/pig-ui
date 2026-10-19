@@ -69,3 +69,12 @@ assert.equal(context.preview[0].name, '未知产品');
 const revised = analyseSheet(makeSheet([['7.5kW', '风机', '2', '台']]), 2, { ...mapping, name: 1, spec: 0 });
 assert.equal(revised.equipment, 1);
 assert.equal(revised.preview[0].spec, '7.5kW');
+/** 自动上下文仅适用于当时的列映射；改列后不能继续隐藏可能成为产品的来源行。 */
+const remappedContextSheet = makeSheet([['3.5米层', '风机'], ['原说明', '消声器']]);
+remappedContextSheet.auto_mapping = { name: 0 };
+remappedContextSheet.auto_context_rows = [{ number: 2, kind: 'section', label: '3.5米层' }];
+const remappedContext = analyseSheet(remappedContextSheet, 2, { name: 1 });
+assert.equal(remappedContext.context, 0);
+assert.equal(remappedContext.preview[0].number, 2);
+assert.equal(remappedContext.preview[0].name, '风机');
+assert.equal(remappedContext.contextMayDiffer, true);

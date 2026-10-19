@@ -69,7 +69,7 @@ export interface ProductRuleBody {
 	combination_supported?: boolean;
 	combination_reason?: string;
 	name: string;
-	rule_type: 'alias' | 'combination' | 'formula';
+	rule_type: 'alias' | 'combination' | 'formula' | 'installation';
 	category?: string;
 	unit: string;
 	aliases: string[];
@@ -83,6 +83,7 @@ export interface ProductRuleBody {
 	template_key?: string;
 	/** 安装项目对应关系；指标项目动态取价，手填单价必须限定适用地区，不保存本单数量与施工条件。 */
 	installation?: ProductRuleInstallation;
+	installation_context?: { height?: string; cross_work?: boolean; product_remark?: string; parameters?: Record<string, string> };
 	/** 已有风机配置补价，沿用风机选型与结算；整台成本已包含适用防爆成本，附阀及安装单独计算。 */
 	fan_price?: FanPriceSupplement;
 	/** 未收录客户型号与已确认本体公式的对应关系；按当前材料、电机和有效指标重新计算。 */
@@ -296,9 +297,11 @@ export interface AccessoryReviewGroup {
 export interface AiRetrySuggestion {
 	row_id: string; current_name: string; current_spec: string; name: string; attributes: Record<string, string>;
 	evidence: string; message: string; verified: boolean; automatic: boolean; used_features: boolean;
+	product_rule?: ProductRuleBody;
+	component_changes?: { component: string; name: string; attributes: Record<string, string>; evidence: string }[];
 }
 export interface AiRetryEntry {
-	row_id: string; position: number; source_file?: string; source_sheet?: string; source_row?: string | number;
+	row_id: string; position: number; source_file?: string; source_sheet?: string; source_row?: string | number; source_locator?: string;
 	before: Partial<QuoteRow>; after?: Partial<QuoteRow>; initial_reason: string; suggestion: AiRetrySuggestion;
 	status: 'suggested' | 'no_suggestion' | 'request_failed' | 'applied' | 'undone'; error?: string;
 	result?: Pick<RowResult, 'status' | 'reason' | 'unit_price' | 'amount'>; calculated_at?: string;
@@ -341,6 +344,8 @@ export interface QuoteBody {
 /** 已保存的每件产品机构成本依据；仅展示，不根据当前行参数重新计算。 */
 export interface EquipmentMechanismDetail {
 	mechanism_count?: number | string;
+	single_base_mechanism?: boolean;
+	mechanism_base_count?: number | string;
 	component_formulas?: Record<string, string>;
 }
 /** 后端逐行计价结果，pending/priced/excluded/installation_only 分别表示待确认/已报价/不报价/仅安装；材料与安装状态独立。 */
@@ -448,6 +453,8 @@ export interface ReviewImportRow {
 
 /** 人工价格回导的预览汇总，column_count 区分不含安装 10 列与含安装 12 列，导入编号用于确认应用。 */
 export interface ReviewImportPreview {
+	installation_rule_candidates?: InstallationRuleCandidate[];
+	can_publish_installation_rules?: boolean;
 	input_recalculated?: boolean;
 	input_results?: ExcelInputResult[];
 	calculation_issues?: string[];
@@ -463,7 +470,7 @@ export interface ReviewImportPreview {
 	derived_count: number;
 	changed_row_count: number;
 	unchanged_count: number;
-	column_count: 10 | 12;
+	column_count: 10 | 12 | 13;
 	review_rows: ReviewImportRow[];
 	changes: ReviewImportChange[];
 	changes_truncated: boolean;
@@ -473,6 +480,36 @@ export interface ReviewImportPreview {
 	equipment_freight_total: string;
 	installation_total: string;
 	before_payment_total: string;
+}
+
+/** 回导采集的安装报价口径；候选由服务器生成，勾选后才创建规则草稿。 */
+export interface InstallationRuleCandidate {
+	candidate_id: string;
+	name: string;
+	spec: string;
+	product_unit: string;
+	unit: string;
+	quantity: string;
+	amount: string;
+	unit_price: string;
+	source_unit_price?: string;
+	source_tax_included?: boolean;
+	tax_factor?: string;
+	region: string;
+	quantity_expression: string;
+	conditions: Record<string, string>;
+	installation_context: { height?: string; cross_work?: boolean; product_remark?: string; parameters?: Record<string, string> };
+	reason: string;
+	eligible: boolean;
+	target?: { id: string; family: string; revision: number; version: number };
+	existing_installation?: ProductRuleInstallation;
+	system_project?: { id: string; name: string; price: string };
+}
+export interface InstallationRuleSelection {
+	candidate_id: string;
+	unit_price: string;
+	tax_basis: 'inclusive' | 'exclusive';
+	confirmed: boolean;
 }
 
 /** AI 清单人工核验回导的单字段变化，row_id 绑定原产品行，visible_row 用于指出 Excel 对应位置。 */

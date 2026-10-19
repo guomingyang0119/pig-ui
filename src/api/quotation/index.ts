@@ -16,6 +16,7 @@ import type {
 	QuoteSummary,
 	QuotePage,
 	ReviewImportPreview,
+	InstallationRuleSelection,
 	AiInputImportPreview,
 	ProductRuleBody,
 	ProductRuleRecommendations,
@@ -124,7 +125,7 @@ export const quoteApi = {
 	/** 负责人更新正式模板确认开关，提交设置修订号防止并发覆盖。 */
 	saveSettings: (settings: QuoteSettings, confirmed: boolean) =>
 		call<QuoteSettings>('/settings', 'put', { revision: settings.revision, formal_template_confirmed: confirmed }),
-	/** 查询当前或已归档报价摘要，服务端按登录人员权限限定可见范围。 */
+	/** 兼容旧调用；超过 100 条时服务端会提示改用 listPage。 */
 	list: (archived = false) => call<QuoteSummary[]>('/quotes?archived=' + archived),
 	/** 按页查询当前账号可见报价，客户和项目关键字在服务端筛选。 */
 	listPage: (archived = false, page = 1, size = 20, keyword = '') =>
@@ -248,11 +249,13 @@ export const quoteApi = {
 		return response.data;
 	},
 	/** 按导入预览编号和报价修订号应用人工价格，返回重新汇总结果与新修订号。 */
-	applyReviewImport: (id: string, revision: number, importId: string, restoreScopeRowIds: string[] = [], keepSystemLocation = false) =>
-		call<{ result: QuoteResult; revision: number }>(`/quotes/${id}/review-imports/${importId}/apply`, 'post', {
+	applyReviewImport: (id: string, revision: number, importId: string, restoreScopeRowIds: string[] = [], keepSystemLocation = false, installationRules: InstallationRuleSelection[] = [], publishInstallationRules = false) =>
+		call<{ result: QuoteResult; revision: number; installation_rules?: { id: string; name: string; status: string }[] }>(`/quotes/${id}/review-imports/${importId}/apply`, 'post', {
 			revision,
 			restore_scope_row_ids: restoreScopeRowIds,
 			keep_system_location: keepSystemLocation,
+			installation_rules: installationRules,
+			publish_installation_rules: publishInstallationRules,
 		}),
 	/** 负责人查询报价与指标操作审计，用于追溯执行人员、目标及时间。 */
 	audit: () => call<{ id: string; actor_name: string; action: string; target: string; created_at: string }[]>('/audit'),

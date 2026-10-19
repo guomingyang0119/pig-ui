@@ -85,6 +85,8 @@
 											plan.showSource ? '收起原表' : '查看原表'
 										}}</el-button>
 									</div>
+									<p class="section-hint">按当前设置预览：第 {{ plan.startRow || '未选' }} 行起；名称列 {{ columnLetter(plan.mapping.name) }}；数量列 {{ columnLetter(plan.mapping.engineering_quantity ?? plan.mapping.quantity) }}。创建报价时采用这组映射。</p>
+									<p v-if="profile(plan).contextMayDiffer" class="mapping-warning">列映射已调整，原先自动识别的标题和说明行也列入此预览；创建报价时会按最终映射重新判断，请核对这些来源行。</p>
 									<el-table :data="profile(plan).preview" size="small" max-height="250" empty-text="请先核对产品名称列和起始行">
 										<el-table-column prop="number" label="原行号" width="70" />
 										<el-table-column prop="name" label="产品名称" min-width="190" show-overflow-tooltip />
@@ -237,17 +239,21 @@ function sheetStatus(plan: SheetPlan) {
 	return `已匹配 ${Object.values(plan.mapping).filter((v) => v != null).length} 列`;
 }
 /** 按最大原始列数生成 Excel 列字母和表头说明；表头取自动识别或人工起始行的上一行。 */
+function columnLetter(index?: number | null) {
+	if (index == null || index < 0) return '未选';
+	let number = index + 1, letter = '';
+	while (number > 0) {
+		number--;
+		letter = String.fromCharCode(65 + (number % 26)) + letter;
+		number = Math.floor(number / 26);
+	}
+	return letter;
+}
 function columns(plan: SheetPlan) {
 	const count = Math.max(0, ...plan.sheet.rows.map((r) => r.cells.length));
-	const headerRow = plan.sheet.rows.find((r) => r.number === (plan.sheet.auto_start_row || plan.startRow || 2) - 1);
+	const headerRow = plan.sheet.rows.find((r) => r.number === (plan.startRow || plan.sheet.auto_start_row || 2) - 1);
 	return Array.from({ length: count }, (_, index) => {
-		let number = index + 1,
-			letter = '';
-		while (number > 0) {
-			number--;
-			letter = String.fromCharCode(65 + (number % 26)) + letter;
-			number = Math.floor(number / 26);
-		}
+		const letter = columnLetter(index);
 		return { index, letter, label: letter + ' · ' + (headerRow?.cells[index] || '空表头') };
 	});
 }
