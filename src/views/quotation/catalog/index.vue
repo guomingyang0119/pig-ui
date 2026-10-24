@@ -1,12 +1,12 @@
 <template>
-	<main class="quotation-page" v-loading="busy">
+	<main class="quotation-page" v-loading="busy && !confirming">
 		<!-- 指标管理入口：风管、设备和安装分别维护版本，风管页面还提供公式中文对照、正式模板确认开关及报价审计查询。 -->
 		<header class="q-header">
 			<div>
 				<h1>报价指标管理</h1>
 				<p class="q-subtitle">维护风管与设备的基价、计价规则和付款方案，发布后用于新试算。</p>
 			</div>
-			<el-button v-if="catalogMode === 'duct' && canManage && !catalogs.length" type="primary" @click="seed">初始化基价草稿</el-button>
+			<el-button :disabled="busy" v-if="catalogMode === 'duct' && canManage && !catalogs.length" type="primary" @click="seed">初始化基价草稿</el-button>
 		</header>
 		<el-tabs v-model="catalogMode">
 			<el-tab-pane label="风管指标" name="duct">
@@ -19,24 +19,36 @@
 							><span class="q-muted">{{ dirty ? '有未保存修改' : editable ? '草稿可编辑' : '此版本只读' }}</span>
 						</div>
 						<div class="catalog-version-actions">
-							<el-button @click="versionHistoryVisible = !versionHistoryVisible">版本记录</el-button
-							><el-button @click="metadataVisible = !metadataVisible">版本信息</el-button>
+							<el-button :disabled="busy" @click="versionHistoryVisible = !versionHistoryVisible">版本记录</el-button
+							><el-button :disabled="busy" @click="metadataVisible = !metadataVisible">版本信息</el-button>
 							<div v-if="canManage" class="q-toolbar">
 								<template v-if="editable">
-									<el-button @click="save">保存草稿</el-button>
-									<el-button :disabled="!editing.id || dirty" @click="act('trial')">校验指标</el-button>
-									<el-button type="primary" :disabled="!editing.id || dirty" @click="act('publish')">发布指标</el-button>
-									<el-button v-if="editing.id" text type="danger" @click="act('delete')">删除草稿</el-button>
+									<el-button :disabled="busy" @click="save">保存草稿</el-button>
+									<el-button :disabled="busy" v-if="!regionalPrices || !editing.body.purchased_flanges" @click="act('load-regional-prices')"
+										>载入地区价格与外购法兰</el-button
+									>
+									<el-button :disabled="busy || (!editing.id || dirty)" @click="act('trial')">校验指标</el-button>
+									<el-button type="primary" :disabled="busy || (!editing.id || dirty)" @click="act('publish')">发布指标</el-button>
+									<el-button :disabled="busy" v-if="editing.id" text type="danger" @click="act('delete')">删除草稿</el-button>
 								</template>
 								<template v-else>
-									<el-button type="primary" @click="act('revise')">创建新版本</el-button>
-									<el-button v-if="editing.status === 'published'" @click="act('retire')">停用此版本</el-button>
-									<el-button v-else @click="act('reactivate')">重新启用</el-button>
+									<el-button :disabled="busy" type="primary" @click="act('revise')">创建新版本</el-button>
+									<el-button :disabled="busy" v-if="editing.status === 'published'" @click="act('retire')">停用此版本</el-button>
+									<el-button :disabled="busy" v-else @click="act('reactivate')">重新启用</el-button>
 								</template>
 							</div>
 						</div>
 					</div>
 
+					<div class="q-toolbar" style="margin: 16px 0">
+						<strong>材料价格地区</strong>
+						<el-select :disabled="busy" v-model="priceRegion" aria-label="材料吨价地区" style="width: 150px">
+							<el-option v-for="region in ductPriceRegions" :key="region" :label="region" :value="region" />
+						</el-select>
+						<span class="q-muted">材料吨价与外购法兰单价按项目省份取价；空白表示未配置。</span>
+					</div>
+					<p v-if="!regionalPrices" class="catalog-scope">此历史版本仅维护贵州吨价。创建新版本或在草稿中载入地区吨价后，可维护各地区价格。</p>
+					<p v-if="editing.body.regional_price_source" class="q-muted">吨价依据：{{ editing.body.regional_price_source }}</p>
 					<div v-show="metadataVisible" class="catalog-metadata">
 						<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
 							<el-form-item label="指标名称"><el-input v-model="editing.body.name" /></el-form-item>
@@ -52,24 +64,23 @@
 				</section>
 				<div v-show="versionHistoryVisible || !editing" class="catalog-versions">
 					<h3>风管指标版本</h3>
-					<el-table :data="catalogs" class="q-table" highlight-current-row @row-click="select" style="margin-top: 20px">
-						<el-table-column label="指标名称" min-width="220"
+					<el-table :data="catalogs" row-key="id" :row-class-name="versionRowClass" class="q-table" @row-click="select" style="margin-top: 18px">
+						<el-table-column label="指标名称" min-width="210"
 							><template #default="{ row }"
-								><el-button link type="primary" @click.stop="select(row)">{{ row.body.name }}</el-button></template
+								><el-button :disabled="busy" link type="primary" @click.stop="select(row)">{{ row.body.name }}</el-button></template
 							></el-table-column
 						>
-						<el-table-column prop="version" label="版本" width="75" />
-						<el-table-column label="状态" width="120"
-							><template #default="{ row }"
-								><el-tag :type="row.status === 'published' ? 'success' : 'info'" effect="plain">{{ labels[row.status] }}</el-tag></template
-							></el-table-column
+						<el-table-column prop="version" label="版本" width="70" />
+						<el-table-column label="浏览状态" width="110">
+							<template #default="{ row }"><el-tag v-if="row.id === editing?.id" size="small" effect="plain">正在查看</el-tag></template>
+						</el-table-column>
+						<el-table-column label="状态" width="100"
+							><template #default="{ row }">{{ labels[row.status] }}</template></el-table-column
 						>
-						<el-table-column label="生效时间" min-width="200"
+						<el-table-column label="生效时间" min-width="240"
 							><template #default="{ row }">{{ row.body.effective_from }} ～ {{ row.body.effective_to || '长期有效' }}</template></el-table-column
 						>
-						<el-table-column label="来源" min-width="280"
-							><template #default="{ row }">{{ row.body.source }}</template></el-table-column
-						>
+						<el-table-column prop="body.source" label="来源" min-width="260" show-overflow-tooltip />
 					</el-table>
 				</div>
 				<div v-if="editing" class="catalog-layout">
@@ -78,7 +89,7 @@
 						<div v-for="group in visibleDuctDirectory" :key="group.label" class="catalog-product-group">
 							<p class="catalog-directory-label">{{ group.label }}</p>
 							<div class="catalog-product-list">
-								<button
+								<button :disabled="busy"
 									v-for="item in group.items"
 									:key="item.id"
 									type="button"
@@ -98,42 +109,109 @@
 						</div>
 						<section v-if="isDuctMaterial" class="catalog-product-section" aria-label="板材基价">
 							<h3>板材基价</h3>
-							<p class="catalog-scope">按当前材质和厚度维护吨价；风管的法兰、配件和付款条件使用本版本共用设置。</p>
+							<p class="catalog-scope">维护{{ priceRegion }}当前材质和厚度的吨位单价（元/吨）；其他地区价格独立保存。</p>
 							<el-table :data="materials" class="q-table" max-height="550">
 								<el-table-column prop="name" label="板材名称" min-width="210" />
 								<el-table-column prop="thickness" label="厚度（mm）" width="130" />
 								<el-table-column label="吨价（元/吨）" min-width="140"
 									><template #default="{ row }"
-										><el-input v-model="row.ton_price" :aria-label="row.name + '吨价'" :disabled="!editable" inputmode="decimal" /></template
+										><el-input
+											:model-value="ductTonPrice(row, priceRegion, regionalPrices)"
+											@update:model-value="setDuctTonPrice(row, priceRegion, regionalPrices, $event)"
+											:aria-label="priceRegion + row.name + '吨价'"
+											:disabled="!priceEditable"
+											placeholder="未配置"
+											inputmode="decimal" /></template
 								></el-table-column>
-								<el-table-column prop="source_cell" label="原表位置" min-width="150" />
+								<el-table-column label="原表位置" min-width="150"
+									><template #default="{ row }">{{ ductTonPriceSource(row, priceRegion, regionalPrices) }}</template></el-table-column
+								>
+							</el-table>
+							<h3 style="margin-top: 24px">缺少板厚时的默认选厚</h3>
+							<p class="catalog-scope">客户已明确的板厚优先。矩形看长边，圆形看直径；共板法兰、共板打孔用中压，排烟系统或角钢法兰用高压，排烟优先。超过4000mm待确认。</p>
+							<el-table :data="thicknessDefaults" class="q-table" aria-label="风管默认板厚">
+								<el-table-column prop="range" label="长边／直径（mm）" min-width="200" />
+								<el-table-column prop="medium" label="中压厚度（mm）" min-width="150" />
+								<el-table-column prop="high" label="高压厚度（mm）" min-width="150" />
 							</el-table>
 						</section>
 						<section v-if="tab === 'flanges'" class="catalog-product-section" aria-label="角钢法兰价格">
-							<h3>规格与加工价格</h3>
-							<el-table :data="editing.body.flanges" class="q-table" max-height="550">
+							<h3>按吨价公式计算的角钢法兰</h3>
+							<p class="catalog-scope">黑角铁、热镀锌法兰的角铁材料部分乘 0.92 后再加加工费；吨价按项目省份取价，未配置时待确认。外购不含税成品固定价不重复折减。</p>
+							<el-table :data="flangeDefaults" class="q-table" aria-label="角钢法兰默认选型" style="margin-bottom: 18px">
+								<el-table-column prop="basis" label="面积口径" min-width="120" />
+								<el-table-column prop="region" label="地区" min-width="130" />
+								<el-table-column prop="size30" label="30号默认档位" min-width="190" />
+								<el-table-column prop="size40" label="40号默认档位" min-width="190" />
+							</el-table>
+							<p v-if="editing.body.black_flange_regions && !editing.body.black_flange_regions.includes(priceRegion)" class="q-muted">
+								{{ priceRegion }}不提供黑角铁法兰，仅展示可用法兰指标。
+							</p>
+							<el-table :data="flanges" class="q-table" max-height="550">
 								<el-table-column prop="name" label="规格 / 档位" min-width="300" />
 								<el-table-column prop="size" label="型号" width="80" /><el-table-column prop="grade" label="计算档位" width="110" />
 								<el-table-column label="吨价（元/吨）" min-width="130"
 									><template #default="{ row }"
-										><el-input v-model="row.ton_price" :aria-label="row.name + '吨价'" :disabled="!editable" inputmode="decimal" /></template
+										><el-input
+											:model-value="ductTonPrice(row, priceRegion, regionalPrices)"
+											@update:model-value="setDuctTonPrice(row, priceRegion, regionalPrices, $event)"
+											:aria-label="priceRegion + row.name + '吨价'"
+											:disabled="!priceEditable"
+											placeholder="未配置"
+											inputmode="decimal" /></template
 								></el-table-column>
 								<el-table-column label="加工费（元/米）" min-width="145"
 									><template #default="{ row }"
 										><el-input v-model="row.processing_per_m" :aria-label="row.name + '加工费'" :disabled="!editable" inputmode="decimal" /></template
 								></el-table-column>
+								<el-table-column label="吨价原表位置" min-width="180"
+									><template #default="{ row }">{{ ductTonPriceSource(row, priceRegion, regionalPrices) }}</template></el-table-column
+								>
 							</el-table>
+							<template v-if="editing.body.purchased_flanges">
+								<h3 style="margin-top: 24px">外购不锈钢成品法兰 · 未税固定单价</h3>
+								<p class="catalog-scope">
+									成品每米总价已包含加工费，不使用吨价公式、不重复加加工费。按风管面积报价时，每米价 × {{ editing.body.rates.flange_area_factor }}
+									折算为每平方米法兰费用；填写实际米数时按米另计，不重复按面积计费。
+								</p>
+								<el-table :data="editing.body.purchased_flanges" class="q-table" aria-label="外购法兰固定单价">
+									<el-table-column prop="name" label="外购成品法兰" min-width="240" />
+									<el-table-column label="规格" width="110"
+										><template #default="{ row }">{{ row.size }}×{{ row.size }}</template></el-table-column
+									>
+									<el-table-column label="未税成品单价（元/米，含加工费）" min-width="230">
+										<template #default="{ row }"
+											><el-input
+												:model-value="ductFixedPrice(row, priceRegion)"
+												@update:model-value="setDuctFixedPrice(row, priceRegion, $event)"
+												:aria-label="priceRegion + row.name + '成品每米价'"
+												:disabled="!priceEditable"
+												placeholder="未配置"
+												inputmode="decimal"
+										/></template>
+									</el-table-column>
+									<el-table-column label="每平方米折算（元/㎡）" min-width="190"
+										><template #default="{ row }">{{
+											ductFixedPrice(row, priceRegion) ? ductFixedPrice(row, priceRegion) + ' × ' + editing.body.rates.flange_area_factor : '未配置'
+										}}</template></el-table-column
+									>
+									<el-table-column label="原表成品总价位置" min-width="190"
+										><template #default="{ row }">{{ row.source_cells[priceRegion] || '未配置来源' }}</template></el-table-column
+									>
+								</el-table>
+							</template>
 						</section>
 						<section v-if="visibleRateKeys.length" class="catalog-product-section" aria-label="风管加工与系数">
 							<h3>{{ isDuctMaterial ? '共用加工参数' : '加工费与系数' }}</h3>
 							<p class="catalog-scope">{{ rateScope }}</p>
 							<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
 								<el-form-item v-for="key in visibleRateKeys" :key="key" :label="rateLabels[key] || key"
-									><el-input v-model="editing.body.rates[key]" :aria-label="rateLabels[key] || key" inputmode="decimal"
+									><el-input :model-value="editing.body.rates[key] ?? (key === 'circular_finished_extra' ? '30' : '')"
+										@update:model-value="editing.body.rates[key] = $event" :aria-label="rateLabels[key] || key" inputmode="decimal"
 								/></el-form-item>
 							</el-form>
 							<p v-if="tab === 'rates'" class="q-muted">
-								圆法兰周长按 3.14 × 直径计算；每米基价不含税 10 元、含税 12 元。此已确认规则由 Java 引擎执行。
+								明确圆形风管时，成品、半成品均按对应状态的角钢法兰方形直管单价，在面积换算后加圆形风管附加价（默认30元/㎡），再计运费及税费；已含法兰，不再另算法兰费用。选厚仍按客户连接形式区分中压和高压。旧圆管合口及圆法兰参数仅供历史依据查看。
 							</p>
 						</section>
 						<section v-if="tab === 'payment'" class="catalog-product-section">
@@ -198,7 +276,9 @@
 				</div>
 				<p v-if="editing" class="catalog-footer">各类风管共用当前指标版本。修改后请保存、校验并发布；停用最新版本后不会自动回退到旧价格。</p>
 			</el-tab-pane>
-			<el-tab-pane label="设备指标" name="equipment" lazy><EquipmentCatalogPanel :initial-product="String(route.query.product || '')" :initial-section="String(route.query.section || '')" /></el-tab-pane>
+			<el-tab-pane label="设备指标" name="equipment" lazy
+				><EquipmentCatalogPanel :initial-product="String(route.query.product || '')" :initial-section="String(route.query.section || '')"
+			/></el-tab-pane>
 			<el-tab-pane label="安装指标" name="installation" lazy><InstallationCatalogPanel /></el-tab-pane>
 		</el-tabs>
 		<section v-if="settings" class="q-section">
@@ -206,7 +286,7 @@
 				<h2>正式报价模板</h2>
 				<el-switch
 					:model-value="settings.policy.formal_template_confirmed"
-					:disabled="!canManage"
+					:disabled="busy || !canManage"
 					active-text="已确认模板"
 					inactive-text="暂停正式导出"
 					@change="changeTemplate"
@@ -216,20 +296,7 @@
 				不含安装使用「单层材料」，含安装使用「带安装」。模板版本 {{ settings.template_version }}，引擎 {{ settings.engine_version }}。
 			</p>
 		</section>
-		<section v-if="canManage" class="q-section">
-			<details @toggle="loadAudit">
-				<summary style="cursor: pointer">最近操作记录</summary>
-				<el-table :data="audit" class="q-table" max-height="340" style="margin-top: 14px"
-					><el-table-column prop="created_at" label="时间" min-width="210" /><el-table-column
-						prop="actor_name"
-						label="操作人"
-						width="150" /><el-table-column prop="action" label="操作" min-width="160" /><el-table-column
-						prop="target"
-						label="记录编号"
-						min-width="290"
-				/></el-table>
-			</details>
-		</section>
+		<AuditHistory v-if="canManage" />
 	</main>
 </template>
 <script setup lang="ts" name="QuotationCatalog">
@@ -244,8 +311,18 @@ import type { Catalog, QuoteSettings } from '/@/types/quotation';
 import '/@/views/quotation/quotation.scss';
 import './catalogLayout.scss';
 import { ductDirectory, ductMaterialGroup, ductRateGroup } from './indicatorDirectory';
+import {
+	ductPriceRegions,
+	ductTonPrice,
+	setDuctTonPrice,
+	ductTonPriceSource,
+	visibleDuctFlanges,
+	ductFixedPrice,
+	setDuctFixedPrice,
+} from './ductRegionalPrices';
 import EquipmentCatalogPanel from './EquipmentCatalogPanel.vue';
 import InstallationCatalogPanel from './InstallationCatalogPanel.vue';
+import AuditHistory from './AuditHistory.vue';
 /** 当前指标类型与风管表格标签页独立保存，设备和安装委托专用面板处理。 */
 const route = useRoute();
 const catalogMode = ref(['equipment', 'installation'].includes(String(route.query.mode)) ? String(route.query.mode) : 'duct');
@@ -255,9 +332,27 @@ const catalogs = ref<Catalog[]>([]),
 	settings = ref<QuoteSettings>(),
 	baseline = ref(''),
 	busy = ref(false),
+	confirming = ref(false),
 	tab = ref('galvanized_40');
 const versionHistoryVisible = ref(false),
 	metadataVisible = ref(false);
+const priceRegion = ref('贵州');
+const regionalPrices = computed(() => !!editing.value?.body.price_regions);
+const priceEditable = computed(() => editable.value && (regionalPrices.value || priceRegion.value === '贵州'));
+const thicknessDefaults = [
+	{ range: '≤320', medium: '0.5', high: '0.75' },
+	{ range: '＞320且≤450', medium: '0.6', high: '0.75' },
+	{ range: '＞450且≤630', medium: '0.75', high: '1.0' },
+	{ range: '＞630且≤1000', medium: '0.75', high: '1.0' },
+	{ range: '＞1000且≤1550', medium: '1.0', high: '1.2' },
+	{ range: '＞1550且≤2000', medium: '1.2', high: '1.5' },
+	{ range: '＞2000且≤4000', medium: '1.2', high: '1.5' },
+];
+const flangeDefaults = [
+	{ basis: '净面积', region: '所有地区', size30: '30热镀锌8.5KG', size40: '40热镀锌14.5KG' },
+	{ basis: '开板面积', region: '贵州', size30: '30黑角铁6.5KG', size40: '40黑角铁11.5KG' },
+	{ basis: '开板面积', region: '其他地区', size30: '30热镀锌7.5KG', size40: '40热镀锌12.5KG' },
+];
 const visibleDuctDirectory = computed(() =>
 	ductDirectory.map((group) => ({
 		...group,
@@ -270,8 +365,10 @@ const currentDuctGroup = computed(() => visibleDuctDirectory.value.find((group) 
 const currentDuct = computed(() => currentDuctGroup.value?.items.find((item) => item.id === tab.value));
 const isDuctMaterial = computed(() => ductDirectory[0].items.some((item) => item.id === tab.value));
 const materials = computed(() => (editing.value?.body.materials || []).filter((row) => ductMaterialGroup(row.material) === tab.value));
+const flanges = computed(() => (editing.value ? visibleDuctFlanges(editing.value.body, priceRegion.value) : []));
 const rateGroup = computed(() => (tab.value.startsWith('galvanized_') ? 'galvanized' : tab.value.startsWith('stainless_') ? 'stainless' : tab.value));
-const visibleRateKeys = computed(() => Object.keys(editing.value?.body.rates || {}).filter((key) => ductRateGroup(key) === rateGroup.value));
+const visibleRateKeys = computed(() => [...new Set([...Object.keys(editing.value?.body.rates || {}), 'circular_finished_extra'])]
+	.filter((key) => ductRateGroup(key) === rateGroup.value));
 const rateScope = computed(() =>
 	rateGroup.value === 'galvanized'
 		? '40g 与 80g 镀锌风管共用以下加工参数，修改任一处会同步影响两类风管。'
@@ -279,10 +376,9 @@ const rateScope = computed(() =>
 		? '201 与 304 不锈钢风管共用以下加工参数，板材吨价分别维护。'
 		: '本版本中符合条件的风管共用以下参数。'
 );
-const audit = ref<Awaited<ReturnType<typeof quoteApi.audit>>>([]);
 /** 负责人的管理权限与草稿状态共同决定编辑能力，dirty 仅比较当前指标正文以提示未保存修改。 */
 const canManage = computed(() => auth('quote_manage')),
-	editable = computed(() => canManage.value && editing.value?.status === 'draft');
+	editable = computed(() => canManage.value && !busy.value && editing.value?.status === 'draft');
 const dirty = computed(() => !!editing.value && JSON.stringify(editing.value.body) !== baseline.value);
 const labels: Record<string, string> = { draft: '草稿', published: '已发布', retired: '已停用' };
 /** 把风管加工费、密度、法兰、配件、税费与净面积系数字段映射为中文说明，保留后台指标键名。 */
@@ -301,7 +397,8 @@ const rateLabels: Record<string, string> = {
 	stainless_irregular: '不锈钢异形加工费',
 	closing_common: '共板合口费（元/㎡）',
 	closing_angle: '角钢合口费（元/㎡）',
-	closing_round: '圆管合口费（元/㎡）',
+	closing_round: '旧圆管合口费（历史参数）',
+	circular_finished_extra: '圆形风管附加价（元/㎡，成品／半成品均含法兰）',
 	closing_0_5_extra: '0.5mm 成品额外合口费',
 	accessory_per_sqm: '共板配件折算（元/㎡）',
 	corner_unit_price: '角码实际单价（元/个）',
@@ -358,14 +455,14 @@ const formulaParameters: Record<string, FormulaParameter> = {
 	flange_grade: {
 		label: '角钢计算档位',
 		unit: '业务档位值',
-		description: '取「角钢法兰」中匹配规格的计算档位。30# 默认 7.5，40# 默认 12.5；50# 需明确选择档位。',
+		description: '明确档位优先；默认按面积口径和项目省份选择。净面积取热镀锌30# 8.5、40# 14.5；开板贵州取黑角铁6.5/11.5，其他地区取热镀锌7.5/12.5；50# 需明确选择。',
 	},
 	flange_processing: { label: '角钢法兰加工费', unit: '元/米', description: '取「角钢法兰」中所选材质、规格和档位对应的每米加工费。' },
 };
 const formulaNotes: Record<string, string> = {
 	material_price: '计算结果：板材成本（元/㎡）。0.001 用于将厚度从毫米换算为米，配合吨/m³的密度和元/吨的吨价计算。',
 	body_sale: '计算结果：风管主体基础价（元/㎡）。法兰、打孔、运费及面积、付款、税费系数按各自规则继续计算。',
-	flange_per_meter: '计算结果：角钢法兰基础价（元/米）。1000 用于吨价换算，6 为按每根 6 米折算的长度；计算档位沿用角钢法兰表的业务数值。',
+	flange_per_meter: '计算结果：角钢法兰基础价（元/米）。公式中的角钢吨价已乘0.92，不能重复折减；加工费不乘0.92。1000用于吨价换算，6为每根6米。',
 	flange_per_area: '计算结果：角钢法兰面积折算价（元/㎡）。仅用于按面积折算法兰费用的情况。',
 };
 const formulaFunctions: Record<string, string> = {
@@ -384,9 +481,9 @@ function describeParameter(key: string, expressionKey: string): FormulaParameter
 	if (key === 'ton_price') {
 		const flange = expressionKey.startsWith('flange_');
 		return {
-			label: flange ? '角钢吨价' : '板材吨价',
+			label: flange ? '角钢折税吨价' : '板材吨价',
 			unit: '元/吨',
-			description: flange ? '取「角钢法兰」中所选角钢材质、规格和档位对应的吨价。' : '取「板材基价」中与报价行材质、厚度匹配的吨价。',
+			description: flange ? '取项目省份、角钢材质、规格和档位对应的原始吨价乘0.92后传入；源吨价保持原值，加工费不折减。' : '取「板材基价」中与报价行材质、厚度匹配的吨价。',
 		};
 	}
 	if (formulaParameters[key]) return formulaParameters[key];
@@ -415,15 +512,36 @@ const formulaGuides = computed(() =>
 	})
 );
 /** 读取风管指标及模板设置，深拷贝选中版本并建立保存基线，避免修改已发布数据。 */
-async function reload(id?: string) {
-	catalogs.value = (await quoteApi.resources()).filter((c) => c.kind === 'duct_catalog');
-	settings.value = await quoteApi.settings();
-	const item = catalogs.value.find((c) => c.id === id) || catalogs.value[0];
+let reloadSequence = 0;
+let disposed = false;
+async function reload(id?: string, target = editing.value, input = JSON.stringify(target?.body)) {
+	const request = ++reloadSequence;
+	const loaded = (await quoteApi.resources()).filter((c) => c.kind === 'duct_catalog');
+	const loadedSettings = await quoteApi.settings();
+	if (disposed || request !== reloadSequence || editing.value !== target) return false;
+	catalogs.value = loaded;
+	settings.value = loadedSettings;
+	const item = loaded.find((c) => c.id === id) || loaded[0];
+	if (target && JSON.stringify(target.body) !== input) {
+		if (item && (!target.id || item.id === target.id)) {
+			target.id = item.id;
+			target.revision = item.revision;
+			baseline.value = JSON.stringify(item.body);
+		}
+		ElMessage.warning('请求后指标又有修改，已保留最新输入，请重新保存');
+		return false;
+	}
 	editing.value = item ? JSON.parse(JSON.stringify(item)) : undefined;
 	baseline.value = editing.value ? JSON.stringify(editing.value.body) : '';
+	return true;
 }
+
 /** 离开页面或切换版本前确认是否放弃未保存的风管指标修改。 */
 async function leave() {
+	if (busy.value) {
+		ElMessage.warning('请求处理中，请完成后再离开或切换版本');
+		return false;
+	}
 	if (!dirty.value) return true;
 	try {
 		await confirm('有未保存的指标修改，确定放弃？');
@@ -432,14 +550,21 @@ async function leave() {
 		return false;
 	}
 }
+/** 高亮实际查看的版本，与设备、安装列表使用相同标记。 */
+function versionRowClass({ row }: { row: Catalog }) {
+	return row.id === editing.value?.id ? 'catalog-version-selected' : '';
+}
 /** 选中其他指标前处理未保存输入，再复制目标正文；重复选中当前版本不重复重置表单。 */
 async function select(item: Catalog) {
-	if (editing.value?.id === item.id || !(await leave())) return;
+	if (busy.value || editing.value?.id === item.id) return;
+	const target = editing.value;
+	if (!(await leave()) || busy.value || editing.value !== target) return;
 	editing.value = JSON.parse(JSON.stringify(item));
 	baseline.value = JSON.stringify(item.body);
 }
 /** 调用后端初始化基价草稿并进入新版本，负责人仍需核对、保存、校验和发布。 */
 async function seed() {
+	if (busy.value) return;
 	busy.value = true;
 	try {
 		const r = await quoteApi.seed();
@@ -453,58 +578,80 @@ async function seed() {
 }
 /** 以当前资源 ID 和修订号保存风管草稿，成功后刷新正文与基线。 */
 async function save() {
-	if (!editing.value) return;
+	if (!editing.value || !editable.value || busy.value) return;
+	const target = editing.value;
+	const submitted = JSON.parse(JSON.stringify(target));
+	const input = JSON.stringify(submitted.body);
 	busy.value = true;
 	try {
-		const id = editing.value.id;
-		await quoteApi.saveResource(editing.value);
-		await reload(id);
-		ElMessage.success('指标草稿已保存');
+		let id = submitted.id;
+		if (id) await quoteApi.saveResource(submitted);
+
+		if (disposed || editing.value !== target) return;
+		if (await reload(id, target, input)) ElMessage.success('指标草稿已保存');
 	} catch (e) {
-		report(e);
+		if (!disposed && editing.value === target) report(e);
 	} finally {
-		busy.value = false;
+		if (!disposed) busy.value = false;
 	}
 }
+
 /** 执行发布、停用、删除、重新启用及修订等指标动作；停用最新版本不能自动退回旧价格，实际状态判断由后端负责。 */
 async function act(action: string) {
-	if (!editing.value) return;
+	if (!editing.value || busy.value) return;
+	const target = editing.value;
+	const input = JSON.stringify(target.body);
+	busy.value = true;
 	try {
 		const messages: Record<string, string> = {
+			'load-regional-prices':
+				'确认载入地区吨价与外购法兰成品价？保留已维护价格、公式和加工费，补充四种外购法兰及黑角铁仅贵州可用的范围。陕西及原表缺价留空。保存发布后用于新试算。',
 			publish: '确认发布此指标？生效后，新试算将使用此版本。',
 			retire: '确认停用？停用最新版本后将阻止新的正式报价，不会回退到旧版本。',
 			delete: '确认删除这份指标草稿？',
 			reactivate: '确认重新启用此版本？',
 		};
-		if (messages[action]) await confirm(messages[action]);
-		busy.value = true;
-		const result = await quoteApi.resourceAction(editing.value, action);
-		await reload(result.id || editing.value.id);
+		if (messages[action]) {
+			// 确认期间保留操作锁，但不显示请求遮罩，以便用户确认或取消。
+			confirming.value = true;
+			try {
+				await confirm(messages[action]);
+			} finally {
+				confirming.value = false;
+			}
+		}
+		if (disposed || editing.value !== target || JSON.stringify(target.body) !== input) return;
+		const result = await quoteApi.resourceAction(JSON.parse(JSON.stringify(target)), action);
+		if (disposed || editing.value !== target) return;
+		await reload(result.id || target.id, target, input);
 		ElMessage.success(result.message || '操作完成');
 	} catch (e) {
 		report(e);
 	} finally {
-		busy.value = false;
+		if (!disposed) busy.value = false;
 	}
 }
 /** 负责人确认正式模板后允许或暂停新的正式导出；提交设置修订号以防并发覆盖，历史导出文件仍保留。 */
 async function changeTemplate(value: string | number | boolean) {
-	if (!settings.value) return;
+	if (!settings.value || busy.value) return;
+	const target = settings.value;
+	busy.value = true;
 	try {
-		await confirm(value ? '确认已核对正式报价模板并允许导出？' : '确认暂停正式报价导出？草稿仍可使用。');
-		settings.value = await quoteApi.saveSettings(settings.value, value === true);
+		confirming.value = true;
+		try {
+			await confirm(value ? '确认已核对正式报价模板并允许导出？' : '确认暂停正式报价导出？草稿仍可使用。');
+		} finally {
+			confirming.value = false;
+		}
+		if (disposed || settings.value !== target) return;
+		const saved = await quoteApi.saveSettings(JSON.parse(JSON.stringify(target)), value === true);
+		if (disposed || settings.value !== target) return;
+		settings.value = saved;
 		ElMessage.success('模板确认状态已更新');
 	} catch (e) {
-		report(e);
-	}
-}
-/** 仅在展开审计区域时加载操作记录，减少日常指标查看中的无关请求。 */
-async function loadAudit(event: Event) {
-	if (!(event.target as HTMLDetailsElement).open) return;
-	try {
-		audit.value = await quoteApi.audit();
-	} catch (e) {
-		report(e);
+		if (!disposed) report(e);
+	} finally {
+		if (!disposed) busy.value = false;
 	}
 }
 /** 关闭或刷新页面时，提醒当前风管指标存在未保存修改。 */
@@ -526,5 +673,9 @@ onMounted(async () => {
 		busy.value = false;
 	}
 });
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
+onBeforeUnmount(() => {
+	disposed = true;
+	reloadSequence++;
+	window.removeEventListener('beforeunload', beforeUnload);
+});
 </script>

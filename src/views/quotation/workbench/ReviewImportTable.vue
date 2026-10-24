@@ -136,7 +136,7 @@ function rowClass({ row }: { row: ReviewImportRow }) {
 	padding: 8px 0;
 }
 :deep(.review-row-modified > td.el-table__cell) {
-	background: #fbfefc;
+	background: var(--el-color-success-light-9);
 }
 :deep(.review-row-pending > td.el-table__cell) {
 	background: var(--el-color-warning-light-9);

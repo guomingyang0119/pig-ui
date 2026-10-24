@@ -21,8 +21,8 @@
 			</el-tab-pane>
 			<el-tab-pane v-if="!product || product.louvers" label="风口参数" name="louvers" lazy>
 				<p class="parameter-help">
-					风口成本取「面积 × 每平方米成本 × 附件倍率」与「最低成本」中的较大值。尺寸增加值分别加到宽和高；散流器按喉部尺寸报价时，沿用已确认的 130 mm
-					换算规则。
+					风口成本取「面积 × 每平方米成本 × 面积成本倍率」与「最低成本」中的较大值。尺寸增加值分别加到宽和高；散流器按喉部尺寸报价时，沿用已确认的 130 mm
+					换算规则。百叶、网状风口按各自四项指标计价；蛋格三款共用普通蛋格基础成本。规则或本行已填写的每平方米成本优先于指标面积成本，其余三项仍取对应类型的指标。
 				</p>
 				<el-table :data="louvers" class="q-table" row-key="key">
 					<el-table-column prop="label" label="风口类型" min-width="210" />
@@ -32,6 +32,16 @@
 						/></template>
 					</el-table-column>
 				</el-table>
+				<template v-if="hasLouverSupplyFactors">
+					<p class="parameter-help">蛋格带网、带阀共用上方普通蛋格基础成本，先算完整普通款供货单价，再乘倍率；安装另算。供货单价倍率与面积成本倍率分别维护。</p>
+					<el-table :data="louverSupplyFactors" class="q-table" row-key="key">
+						<el-table-column prop="label" label="蛋格产品" min-width="240" />
+						<el-table-column label="供货单价倍率" min-width="180"><template #default="{ row }">
+							<el-input :model-value="row.value" :disabled="!editable" :aria-label="row.label + ' · 供货单价倍率'"
+								placeholder="请补充供货单价倍率" @update:model-value="setLouverSupplyFactor(row.key, $event)" />
+						</template></el-table-column>
+					</el-table>
+				</template>
 			</el-tab-pane>
 			<el-tab-pane v-if="!product || product.fan" label="风机本体" name="bodies" lazy>
 				<p class="parameter-help">按系列和机号维护机壳材料成本及其他成本。电机单独按实际功率和极数查价；公式中的变量有中文对照。</p>
@@ -250,7 +260,7 @@ const valveFields = [
 	{ key: 'blade_thickness', label: '叶片厚度（mm）' },
 	{ key: 'labor_base', label: '基础人工费（元）' },
 ];
-const louverFields = ['面积成本（元/㎡）', '最低成本（元）', '宽 / 高增加（mm）', '附件倍率'];
+const louverFields = ['面积成本（元/㎡）', '最低成本（元）', '宽 / 高增加（mm）', '面积成本倍率'];
 const formulaFields = [
 	{ key: 'material_expression' as const, label: '金属材料成本公式（元）' },
 	{ key: 'other_expression' as const, label: '其他成本公式（元）' },
@@ -263,9 +273,18 @@ const valves = computed(() =>
 );
 const louvers = computed(() =>
 	Object.entries(props.catalog.louvers)
+		.filter(([key]) => !['egg_grid_mesh', 'egg_grid_valve'].includes(key))
 		.filter(([key]) => !props.product || louverKeys(props.product.id, Object.keys(props.catalog.louvers)).includes(key))
-		.map(([key, value]) => ({ key, value, label: louverLabels[key] || key }))
+		.map(([key, value]) => ({ key, value, label: key === 'egg_grid' ? '普通蛋格基础成本（带网、带阀款共用）' : louverLabels[key] || key }))
 );
+const hasLouverSupplyFactors = computed(() => louvers.value.some((row) => row.key === 'egg_grid'));
+const louverSupplyFactors = computed(() => ['egg_grid_mesh', 'egg_grid_valve'].map((key) => ({
+	key, label: louverLabels[key], value: props.catalog.louver_supply_factors?.[key] ?? '',
+})));
+function setLouverSupplyFactor(key: string, value: string) {
+	if (!props.editable || !['egg_grid_mesh', 'egg_grid_valve'].includes(key)) return;
+	(props.catalog.louver_supply_factors ||= {})[key] = value;
+}
 const matches = (values: unknown[], search: string) => values.join(' ').toLowerCase().includes(search.trim().toLowerCase());
 const bodies = computed(() =>
 	props.catalog.fan_bodies.filter(

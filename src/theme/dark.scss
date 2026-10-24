@@ -50,6 +50,15 @@
 	--el-text-color-regular: var(--next-text-color-regular) !important;
 	--el-bg-color: var(--next-color-disabled) !important;
 	--el-color-primary-light-9: var(--next-color-hover) !important;
+	// 语义色底色：Element 默认的浅色底（light-8/9）在暗色下过亮，改为半透明重色
+	--el-color-success-light-8: rgba(103, 194, 58, 0.24) !important;
+	--el-color-success-light-9: rgba(103, 194, 58, 0.14) !important;
+	--el-color-warning-light-8: rgba(230, 162, 60, 0.24) !important;
+	--el-color-warning-light-9: rgba(230, 162, 60, 0.14) !important;
+	--el-color-danger-light-8: rgba(245, 108, 108, 0.24) !important;
+	--el-color-danger-light-9: rgba(245, 108, 108, 0.14) !important;
+	--el-color-info-light-8: rgba(144, 147, 153, 0.24) !important;
+	--el-color-info-light-9: rgba(144, 147, 153, 0.14) !important;
 	--el-text-color-disabled: var(--next-text-color-placeholder) !important;
 	--el-text-color-disabled-base: var(--el-color-primary) !important;
 	--el-text-color-placeholder: var(--next-text-color-placeholder) !important;

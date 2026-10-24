@@ -61,3 +61,19 @@ export function useChangeColor() {
 		getLightColor,
 	};
 }
+
+/**
+ * 将品牌主色写入全局 CSS 变量
+ * @description 启动阶段与设置面板共用，避免首屏闪现 Element Plus 默认色
+ * @param primary 品牌主色 hex
+ */
+export function applyPrimaryPalette(primary: string) {
+	if (!primary) return;
+	const { getDarkColor, getLightColor } = useChangeColor();
+	const root = document.documentElement.style;
+	root.setProperty('--el-color-primary-dark-2', getDarkColor(primary, 0.1));
+	root.setProperty('--el-color-primary', primary);
+	for (let i = 1; i <= 9; i++) {
+		root.setProperty(`--el-color-primary-light-${i}`, getLightColor(primary, i / 10));
+	}
+}

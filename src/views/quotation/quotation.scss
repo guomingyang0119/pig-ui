@@ -1,6 +1,5 @@
 /* 报价工作台、报价记录与指标管理的公共页面样式；统一抬头、条件区、金额、状态和响应式布局。 */
 .quotation-page {
-	--quote-accent: #2563eb;
 	padding: 24px 28px;
 	background: var(--el-bg-color, #fff);
 	min-height: calc(100vh - 125px);
@@ -161,9 +160,9 @@
 		transition: border-color 0.16s, background 0.16s;
 	}
 	.q-payment button.selected {
-		border-color: var(--quote-accent);
-		background: #eff6ff;
-		color: var(--quote-accent);
+		border-color: var(--el-color-primary);
+		background: var(--el-color-primary-light-9);
+		color: var(--el-color-primary);
 	}
 	.q-payment small {
 		display: block;
@@ -189,7 +188,7 @@
 		font-size: 13px;
 	}
 	.q-flow b {
-		color: var(--quote-accent);
+		color: var(--el-color-primary);
 		margin-right: 9px;
 	}
 	.q-error {
@@ -282,10 +281,18 @@
 		}
 	}
 	.q-inline-link {
-		color: var(--quote-accent);
+		color: var(--el-color-primary);
 		border: 0;
 		background: transparent;
 		cursor: pointer;
+	}
+	// 暗色下品牌原色对比度不足，强调文字改用浅色变体
+	[data-theme='dark'] & {
+		.q-inline-link,
+		.q-flow b,
+		.q-payment button.selected {
+			color: var(--el-color-primary-light-3);
+		}
 	}
 	@media (max-width: 1050px) {
 		.q-grid {

@@ -436,7 +436,7 @@ import { useI18n } from 'vue-i18n';
 import { storeToRefs } from 'pinia';
 import { useThemeConfig } from '/@/stores/themeConfig';
 import { useSiteConfig } from '/@/stores/siteConfig';
-import { useChangeColor } from '/@/utils/theme';
+import { applyPrimaryPalette, useChangeColor } from '/@/utils/theme';
 import { Local } from '/@/utils/storage';
 import Watermark from '/@/utils/wartermark';
 import commonFunction from '/@/utils/commonFunction';
@@ -449,7 +449,7 @@ const { themeConfig } = storeToRefs(useThemeConfig());
 const { siteConfig } = storeToRefs(useSiteConfig());
 const { userInfos } = storeToRefs(useUserInfo());
 const { copyText } = commonFunction();
-const { getLightColor, getDarkColor } = useChangeColor();
+const { getLightColor } = useChangeColor();
 
 const getThemeConfig = computed(() => themeConfig.value);
 const isMobile = useMediaQuery('(max-width: 999px)');
@@ -461,13 +461,7 @@ const syncWatermark = () => {
 // 全局主题色
 const onColorPickerChange = () => {
 	if (!getThemeConfig.value.primary) return ElMessage.warning('全局主题 primary 颜色值不能为空');
-	// 颜色加深
-	document.documentElement.style.setProperty('--el-color-primary-dark-2', `${getDarkColor(getThemeConfig.value.primary, 0.1)}`);
-	document.documentElement.style.setProperty('--el-color-primary', getThemeConfig.value.primary);
-	// 颜色变浅
-	for (let i = 1; i <= 9; i++) {
-		document.documentElement.style.setProperty(`--el-color-primary-light-${i}`, `${getLightColor(getThemeConfig.value.primary, i / 10)}`);
-	}
+	applyPrimaryPalette(getThemeConfig.value.primary);
 	setDispatchThemeConfig();
 };
 // 菜单/顶栏颜色

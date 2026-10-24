@@ -5,7 +5,7 @@
 			<div class="upload-area">
 				<div>
 					<strong>上传清单，自动匹配列</strong>
-					<p>按项目名称和独立规格列识别，项目特征描述仅保留备查；试算失败后可选择AI辅助识别并重新试算。</p>
+					<p>优先按项目名称和独立规格列识别，缺少的关键参数可从项目特征的明确字段补充；已有参数优先，冲突需核对。其他说明保留备查，试算失败后可选择AI辅助识别。</p>
 				</div>
 				<input type="file" accept=".xlsx,.xls" :disabled="busy" aria-label="选择客户清单" @change="upload" />
 			</div>
@@ -194,7 +194,32 @@ const summaryLabel = computed(() => {
 });
 /** 按本表当前起始行及映射实时计算产品范围和前五条预览，人工调整列后立即反映到摘要。 */
 function profile(plan: SheetPlan) {
-	return analyseSheet(plan.sheet, plan.startRow, plan.mapping);
+	return preview(plan).profile.value;
+}
+/** 每张表的统计和列信息各自跟踪实际输入；展开原文、字段组或修改抬头不重新扫描整张表。 */
+const previews = new WeakMap<SheetPlan, ReturnType<typeof createPreview>>();
+function createPreview(plan: SheetPlan) {
+	const profile = computed(() => analyseSheet(plan.sheet, plan.startRow, plan.mapping));
+	const columnCount = computed(() => {
+		const count = Math.max(0, ...plan.sheet.rows.map((r) => r.cells.length));
+		return count;
+	});
+	const columns = computed(() => {
+		const headerRow = plan.sheet.rows.find((r) => r.number === (plan.startRow || plan.sheet.auto_start_row || 2) - 1);
+		return Array.from({ length: columnCount.value }, (_, index) => {
+			const letter = columnLetter(index);
+			return { index, letter, label: letter + ' · ' + (headerRow?.cells[index] || '空表头') };
+		});
+	});
+	return { profile, columns };
+}
+function preview(plan: SheetPlan) {
+	let cached = previews.get(plan);
+	if (!cached) {
+		cached = createPreview(plan);
+		previews.set(plan, cached);
+	}
+	return cached;
 }
 /** 依据本表识别范围和展开状态生成映射参数组，混合表中的共用列不会重复出现。 */
 function groups(plan: SheetPlan) {
@@ -250,12 +275,7 @@ function columnLetter(index?: number | null) {
 	return letter;
 }
 function columns(plan: SheetPlan) {
-	const count = Math.max(0, ...plan.sheet.rows.map((r) => r.cells.length));
-	const headerRow = plan.sheet.rows.find((r) => r.number === (plan.startRow || plan.sheet.auto_start_row || 2) - 1);
-	return Array.from({ length: count }, (_, index) => {
-		const letter = columnLetter(index);
-		return { index, letter, label: letter + ' · ' + (headerRow?.cells[index] || '空表头') };
-	});
+	return preview(plan).columns.value;
 }
 /** 重置本次导入计划与报价抬头，打开空白弹窗等待选择客户清单。 */
 function open() {

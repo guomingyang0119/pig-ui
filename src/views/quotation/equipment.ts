@@ -17,9 +17,10 @@ export const equipmentKinds: Record<string, string> = reactive({
 	plenum: '静压箱 / 接管箱',
 	elbow: '消声弯头',
 	purchased: '外购设备',
+	fire_wrap: '防火包裹',
 });
 /** 客户清单的产品类别用于选择参数组；具体成本算法还由 equipment_kind 与产品规则共同确定。 */
-export const equipmentCategories = ['风管', '风机', '风阀', '百叶风口', '消声设备', '外购设备', '其他材料'];
+export const equipmentCategories = ['风管', '风机', '风阀', '百叶风口', '消声设备', '外购设备', '防火包裹', '其他材料'];
 /** 设备成本、毛利、税费、运费门槛等指标的中文说明，帮助负责人核对已发布指标的业务含义。 */
 export const equipmentRates: Record<string, string> = {
 	gross_margin: '毛利率',
@@ -81,7 +82,7 @@ export const equipmentComponents: Record<string, string> = {
 	mechanism: '机构（基础成本 + 适用控制方式附加）',
 	splice: '拼接',
 	panel: '面板',
-	round_processing: '圆阀加工费（完整成本的30%）',
+	round_processing: '圆阀加工费',
 };
 /** 设备及风机本体公式变量的中文含义与单位；显示转换保持原英文表达式和实际计算规则不变。 */
 export const equipmentVariables: Record<string, string> = {
@@ -121,6 +122,10 @@ export const louverLabels: Record<string, string> = {
 	rain_mesh: '防雨百叶带网',
 	gravity: '自垂百叶',
 	gravity_valve: '自垂百叶带阀',
+	mesh_outlet: '网状风口',
+	egg_grid: '蛋格型风口',
+	egg_grid_mesh: '蛋格型风口带网',
+	egg_grid_valve: '蛋格型风口带阀',
 	access: '检修口',
 	hinged: '门铰式风口',
 	hinged_mesh: '门铰式风口带网',
@@ -298,6 +303,7 @@ const kindsByCategory: Record<string, string[]> = reactive({
 	消声设备: ['silencer', 'plenum', 'elbow'],
 	外购设备: ['purchased'],
 	其他材料: ['purchased'],
+	防火包裹: ['fire_wrap'],
 });
 const fieldsByCategory: Record<string, string[]> = reactive({
 	风机: [
@@ -372,6 +378,7 @@ const fieldsByCategory: Record<string, string[]> = reactive({
 	],
 	外购设备: ['equipment_kind', 'model', 'purchased_type'],
 	其他材料: ['equipment_kind', 'model', 'purchased_type'],
+	防火包裹: ['equipment_kind', 'wrap_product_id', 'wrap_thickness', 'wrap_density'],
 });
 
 /** 仅显示选定产品类别所需的参数；隐藏字段的已有值仍保留在 attributes 中。 */
@@ -382,6 +389,8 @@ export function equipmentFieldsFor(category: string, kind = '', productName = ''
 		category === '风阀' &&
 		(['fire', 'electric_fire'].includes(kind) || (!kind && (attributes.valve_material_variant === 'fire_150' || /防火(?:调节)?阀/.test(productName)))) &&
 		(attributes.valve_material_variant === 'fire_150' || /(?<![0-9])150\s*(?:℃|°\s*C?|度|C\b)/i.test(productName));
+	const stainlessCheck = category === '风阀' && (kind === 'check' || (!kind && productName.includes('止回阀'))) &&
+		(/不锈|stainless/i.test(attributes.material || '') || ['201', '304'].includes(attributes.material) || productName.includes('不锈钢'));
 	const controlChoices = equipmentControlChoices(kind, productName);
 	if (controlChoices) keys = keys.filter((key) => key !== 'remote');
 	if (category === '消声设备' && kind === 'elbow') keys = ['equipment_kind', 'area_per_unit'];
@@ -396,11 +405,11 @@ export function equipmentFieldsFor(category: string, kind = '', productName = ''
 			const pressure = kind === 'multi_leaf' && !!controlChoices;
 			return [{ ...field, label: key === 'width' ? (pressure ? '宽（mm）' : '长边（mm，大值）') : (pressure ? '整体高（mm）' : '短边（mm，小值）') }];
 		}
-		if (key === 'material' && fire150)
+		if (key === 'material' && (fire150 || stainlessCheck))
 			return [
 				{
 					...field,
-					label: '150°防火阀材质',
+					label: fire150 ? '150°防火阀材质' : '不锈钢止回阀材质',
 					choices: [
 						['stainless_201', '201不锈钢（默认）'],
 						['stainless_304', '304不锈钢（明确指定）'],

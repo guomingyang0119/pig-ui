@@ -77,6 +77,8 @@ export const rowFields = [
 		choices: [
 			['black', '黑角铁'],
 			['hot_galvanized', '热镀锌角铁'],
+			['stainless_201', '201不锈钢成品法兰（外购）'],
+			['stainless_304', '304不锈钢成品法兰（外购）'],
 		],
 	},
 	{
@@ -88,7 +90,7 @@ export const rowFields = [
 			['50', '50#'],
 		],
 	},
-	{ key: 'flange_grade', label: '角钢计算档位', placeholder: '30# 默认7.5；40# 默认12.5' },
+	{ key: 'flange_grade', label: '角钢计算档位', placeholder: '按面积口径和项目省份默认选档；外购法兰不使用' },
 	{ key: 'flange_meters', label: '本行角钢实际米数' },
 	{ key: 'diameter', label: '圆风管直径（mm）' },
 	{ key: 'round_flange_count', label: '圆法兰数量（个）', placeholder: '无数量时按面积折算' },

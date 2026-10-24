@@ -607,7 +607,6 @@
 ------------------------------- */
 .el-overlay {
 	overflow: hidden;
-	z-index: 1000 !important;
 	backdrop-filter: blur(4px);
 	animation: fade-in var(--transition-base);
 

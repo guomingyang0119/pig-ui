@@ -1,5 +1,13 @@
 /** 报价前后端交换的数据契约；金额和数值条件以字符串保存，空金额表示尚未确认，避免前端浮点数参与正式计价。 */
 export type Money = string | null;
+/** 正式规则在当前页面清单中的实际匹配结果；行标识用于应用、试算回显和原位置定位。 */
+export interface ProductRuleMatches {
+	rule_id: string;
+	family: string;
+	name: string;
+	matched: { row_id: string; position: number; name: string; spec: string }[];
+	skipped: { row_id: string; position: number; name: string; spec: string; reason: string }[];
+}
 /** AI整理检查点只返回进度；原资料及批次内容保存在服务端，不能由客户端改写。 */
 export interface AiImportJob {
 	job_id: string;
@@ -64,6 +72,31 @@ export interface ProductRuleComponent {
 	quantity_expression: string;
 	loss_rate: string;
 }
+export type FanRangeParameter = 'power' | 'airflow' | 'pressure';
+export interface FanCostRange {
+	min: string;
+	max: string;
+	min_inclusive: boolean;
+	max_inclusive: boolean;
+}
+export interface FanRangeCostScope {
+	mode: 'ranges';
+	ranges: Partial<Record<FanRangeParameter, FanCostRange>>;
+	family?: string;
+	attributes: Record<string, string>;
+	name?: never;
+	spec?: never;
+	remark?: never;
+	source_text?: never;
+}
+export interface ExactFixedCostScope {
+	mode?: never;
+	name: string;
+	spec: string;
+	remark?: string;
+	source_text?: string;
+	attributes: Record<string, string>;
+}
 /** 产品规则正文：alias 关联标准算法，combination 汇总组成项，formula 配置自定义成本；名称/别名及 conditions 控制匹配，生效日期控制可用范围。 */
 export interface ProductRuleBody {
 	combination_supported?: boolean;
@@ -78,6 +111,8 @@ export interface ProductRuleBody {
 	conditions: Record<string, string>;
 	components: ProductRuleComponent[];
 	custom_cost?: ProductRuleCustomCost;
+	/** 固定成本适用的已核实配置；匹配时由后端统一解析单位，不按原始规格文本比较。 */
+	cost_scope?: ExactFixedCostScope | FanRangeCostScope;
 	description?: string;
 	formula?: string;
 	template_key?: string;
@@ -221,7 +256,20 @@ export interface FanPriceCandidate {
 }
 /** 原始客户产品行及人工补充参数；风管工程量与设备数量分别保存，来源定位/原文用于核验，排除行必须记录原因。 */
 export type QuoteScope = 'supply' | 'excluded' | 'installation_only';
+/** 服务端分别核验两处产品名称后的计价依据；notice 仅提示原文差异，不改变报价状态。 */
+export interface ProductNameReview {
+	main_name?: string;
+	feature_name?: string;
+	control?: string;
+	control_evidence?: string;
+	issue?: string;
+	notice?: string;
+}
 export interface QuoteRow {
+	/** 工作台原文重字段按需读取；不能将此投影视为完整保存正文。 */
+	input_deferred?: boolean;
+	source_text?: string;
+	product_name_review?: ProductNameReview;
 	import_review?: {
 		section?: string;
 		group_name?: string;
@@ -229,6 +277,7 @@ export interface QuoteRow {
 		dimension_expression?: string;
 		recognition_status?: string;
 		ai_eligible: boolean;
+		feature_parameters?: Record<string, string>;
 		issues: { code: string; kind: string; message: string; ai_eligible: boolean }[];
 	};
 	/** 服务端给出的原字段直径冲突，仅用于本行核对，不保存到常用规则。 */
@@ -264,7 +313,18 @@ export interface QuoteRow {
 	source_issue_reason?: string;
 	source_row?: string | number;
 	source_sheet?: string;
-	original?: { cells: string[]; source_file?: string; source_sheet?: string; source_sheet_index?: number; source_row?: number; source_locator?: string; source_excerpt?: string };
+	original?: {
+		cells: string[];
+		ai_confidence?: {
+			proofs?: Record<string, { kind?: string; source_field?: string; source_excerpt?: string }>;
+		};
+		source_file?: string;
+		source_sheet?: string;
+		source_sheet_index?: number;
+		source_row?: number;
+		source_locator?: string;
+		source_excerpt?: string;
+	};
 }
 /** 风管整单默认条件与配件输入；各行可覆盖具体参数，工程量口径、含税、安装、运费及付款选项参与后端计算。 */
 export interface DuctOptions {
@@ -295,19 +355,44 @@ export interface AccessoryReviewGroup {
 }
 /** 报价可编辑正文，包含客户抬头、产品行、整单条件与来源记录；include_freight 是统一运费选择，AI 草稿额外维护人工核验状态。 */
 export interface AiRetrySuggestion {
-	row_id: string; current_name: string; current_spec: string; name: string; attributes: Record<string, string>;
-	evidence: string; message: string; verified: boolean; automatic: boolean; used_features: boolean;
+	spec?: string;
+	row_id: string;
+	current_name: string;
+	current_spec: string;
+	name: string;
+	attributes: Record<string, string>;
+	evidence: string;
+	message: string;
+	verified: boolean;
+	automatic: boolean;
+	used_features: boolean;
 	product_rule?: ProductRuleBody;
-	component_changes?: { component: string; name: string; attributes: Record<string, string>; evidence: string }[];
+	component_changes?: { component: string; name: string; spec?: string; before?: { name?: string; spec?: string; attributes?: Record<string, string> }; attributes: Record<string, string>; evidence: string }[];
 }
 export interface AiRetryEntry {
-	row_id: string; position: number; source_file?: string; source_sheet?: string; source_row?: string | number; source_locator?: string;
-	before: Partial<QuoteRow>; after?: Partial<QuoteRow>; initial_reason: string; suggestion: AiRetrySuggestion;
-	status: 'suggested' | 'no_suggestion' | 'request_failed' | 'applied' | 'undone'; error?: string;
-	result?: Pick<RowResult, 'status' | 'reason' | 'unit_price' | 'amount'>; calculated_at?: string;
+	row_id: string;
+	position: number;
+	source_file?: string;
+	source_sheet?: string;
+	source_row?: string | number;
+	source_locator?: string;
+	before: Partial<QuoteRow>;
+	after?: Partial<QuoteRow>;
+	initial_reason: string;
+	suggestion: AiRetrySuggestion;
+	status: 'suggested' | 'no_suggestion' | 'request_failed' | 'applied' | 'undone';
+	error?: string;
+	result?: Pick<RowResult, 'status' | 'reason' | 'unit_price' | 'amount'>;
+	calculated_at?: string;
 }
-export interface AiRetryReport { id: string; quote_revision: number; created_at: string; entries: AiRetryEntry[] }
+export interface AiRetryReport {
+	id: string;
+	quote_revision: number;
+	created_at: string;
+	entries: AiRetryEntry[];
+}
 export interface QuoteBody {
+	_input_view?: 'workbench_compact';
 	excel_parameter_review?: { filename: string; calculated_at: string; input_results: ExcelInputResult[] };
 	ai_retry_report?: AiRetryReport;
 	project_region?: string;
@@ -316,8 +401,18 @@ export interface QuoteBody {
 	delivery_region?: string;
 	region_prices_confirmed?: boolean;
 	project_region_suggestions?: string[];
-	region_manual_review_snapshot?: { project_region: string; delivery_region: string; filename: string; lines: { name: string; quantity: string; material_unit: string; material_amount: string; installation_amount: string }[] };
-	manual_review_snapshot?: { review: { filename: string }; requires_confirmation: boolean; total: string | null; lines: { name: string; quantity: string; material_unit: string; material_amount: string; installation_amount: string }[] };
+	region_manual_review_snapshot?: {
+		project_region: string;
+		delivery_region: string;
+		filename: string;
+		lines: { name: string; quantity: string; material_unit: string; material_amount: string; installation_amount: string }[];
+	};
+	manual_review_snapshot?: {
+		review: { filename: string };
+		requires_confirmation: boolean;
+		total: string | null;
+		lines: { name: string; quantity: string; material_unit: string; material_amount: string; installation_amount: string }[];
+	};
 	ai_review_status?: 'pending' | 'approved';
 	ai_source_files?: string[];
 	ai_reused_from?: { quote_id: string; row_count: number };
@@ -350,7 +445,11 @@ export interface EquipmentMechanismDetail {
 }
 /** 后端逐行计价结果，pending/priced/excluded/installation_only 分别表示待确认/已报价/不报价/仅安装；材料与安装状态独立。 */
 export interface RowResult {
-	ai_assist?: { eligible: boolean; reason: string };
+	/** 工作台轻量结果以持久行标识关联；deferred 行的完整过程仅在打开时读取。 */
+	row_id?: string;
+	detail_deferred?: boolean;
+	product_name_review?: ProductNameReview;
+	ai_assist?: { eligible: boolean; reason: string; requires_features?: boolean };
 	installation_input?: ProductRuleInstallationInput;
 	installation_detail?: InstallationLine & { children?: InstallationLine[] };
 	fan_input?: FanInputGuidance;
@@ -364,7 +463,15 @@ export interface RowResult {
 		selection_note?: string;
 		components?:
 			| Record<string, string>
-			| { name: string; source: string; quantity: string; effective_quantity?: string; unit_cost: string; amount: string; detail?: EquipmentMechanismDetail }[];
+			| {
+					name: string;
+					source: string;
+					quantity: string;
+					effective_quantity?: string;
+					unit_cost: string;
+					amount: string;
+					detail?: EquipmentMechanismDetail;
+			  }[];
 		parameters?: { key: string; label: string; unit: string; value: Money; source: string }[];
 		formula_costs?: { name: string; expression: string; amount: string }[];
 		[key: string]: unknown;
@@ -385,8 +492,35 @@ export interface RowResult {
 	line_total?: Money;
 	trace: { step: string; expression: string; value: string }[];
 }
+/** 单行完整过程绑定服务端报价修订，不能应用于其他行或当前未保存输入。 */
+export interface RowCalculationResult {
+	quote_id: string;
+	revision: number;
+	row_id: string;
+	result_stale: boolean;
+	result: RowResult | null;
+}
+export interface RowInputResult {
+	quote_id: string;
+	revision: number;
+	row_id: string;
+	row: QuoteRow;
+}
+export interface QuotePatch {
+	revision: number;
+	metadata?: Partial<Pick<QuoteBody, 'customer' | 'project' | 'contact' | 'delivery_location' | 'quote_date' | 'note' |
+		'project_region' | 'project_region_confirmed' | 'different_delivery_region' | 'delivery_region' | 'region_prices_confirmed' | 'include_freight'>>;
+	duct_options?: Partial<DuctOptions>;
+	equipment_options?: Partial<EquipmentOptions>;
+	installation_options?: Partial<InstallationOptions>;
+	installation_items?: InstallationEntry[];
+	rows: { row_id: string; set: Partial<QuoteRow>; clear: string[] }[];
+	new_rows?: Partial<QuoteRow>[];
+}
 /** 整单试算快照，记录逐行价格、各类费用、付款/取整、待确认数量及所用引擎和指标版本；formal_ready 标明当前是否满足正式报价条件。 */
 export interface QuoteResult {
+	/** AI 未核验草稿仅供排查的预试算，不代表已完成核验或允许正式导出。 */
+	preview_ai?: boolean;
 	manual_review_import?: {
 		import_id: string;
 		filename: string;
@@ -413,6 +547,30 @@ export interface QuoteResult {
 	calculated_at?: string;
 	engine_version: string;
 	installation_notes: string[];
+}
+
+/** 已保存 AI 草稿的全量核验问题，标准清单行与客户原表位置分别显示。 */
+export interface AiReviewPreview {
+	revision: number;
+	ai_review_status?: 'pending' | 'approved';
+	can_approve: boolean;
+	blocking_count?: number;
+	issue_count: number;
+	row_issue_count: number;
+	source_pending_count?: number;
+	issues: {
+		row_id: string | null;
+		row_index: number;
+		standard_row: number;
+		source_file: string;
+		source_sheet: string;
+		source_row: string | number;
+		field: string;
+		message: string;
+		blocking: boolean;
+		source_confirmable?: boolean;
+		source_excerpt?: string;
+	}[];
 }
 
 /** 人工价格校对版的单字段差异；manual 为用户直接修改，derived 为后端依据修改重新计算。 */
@@ -453,6 +611,7 @@ export interface ReviewImportRow {
 
 /** 人工价格回导的预览汇总，column_count 区分不含安装 10 列与含安装 12 列，导入编号用于确认应用。 */
 export interface ReviewImportPreview {
+	price_conflicts?: ReviewPriceConflict[];
 	installation_rule_candidates?: InstallationRuleCandidate[];
 	can_publish_installation_rules?: boolean;
 	input_recalculated?: boolean;
@@ -480,6 +639,50 @@ export interface ReviewImportPreview {
 	equipment_freight_total: string;
 	installation_total: string;
 	before_payment_total: string;
+}
+
+/** 单价与Excel材料总价不一致时，默认按单价重算；固定总价需单独选择并说明。 */
+export interface ReviewPriceConflict {
+	source_row_id: string;
+	visible_row: number;
+	name: string;
+	uploaded_amount: string;
+	calculated_amount: string;
+	reason: string;
+}
+export interface ReviewFixedAmountChoice {
+	row_id: string;
+	reason: string;
+}
+
+export interface QuoteAuditSummary {
+	id: string;
+	actor_id: string | number;
+	actor_name: string;
+	action: string;
+	action_label?: string;
+	target: string;
+	created_at: string;
+}
+export interface QuoteAuditQuery {
+	page: number;
+	size: number;
+	actor?: string;
+	target?: string;
+	action?: string;
+	startDate?: string;
+	endDate?: string;
+}
+export interface QuoteAuditPage {
+	records: QuoteAuditSummary[];
+	total: number;
+	page: number;
+	size: number;
+}
+export interface QuoteAuditDetail extends QuoteAuditSummary {
+	detail: Record<string, unknown>;
+	detail_note?: string;
+	changes: { field: string; label: string; before: unknown; after: unknown }[];
 }
 
 /** 回导采集的安装报价口径；候选由服务器生成，勾选后才创建规则草稿。 */
@@ -535,6 +738,7 @@ export interface ExcelInputResult {
 
 /** AI 清单字段回导的只读预览，统计产品/特殊行和变化数量；确认应用后更新原草稿，不直接产生价格。 */
 export interface AiInputImportPreview {
+	ai_review_preview?: AiReviewPreview;
 	import_id: string;
 	filename: string;
 	line_count: number;
@@ -568,6 +772,7 @@ export interface Quote {
 }
 /** 报价列表使用的轻量摘要，保留客户、项目、版本、总额、待确认数和导出数量，无需加载所有行明细。 */
 export interface QuoteSummary {
+	result_review_required?: boolean;
 	recognition_mode?: string;
 	pricing_mode?: string;
 	id: string;
@@ -598,14 +803,33 @@ export interface PaymentTerm {
 	coefficient: string;
 }
 /** 风管指标正文，维护板材、角钢基价、加工费率、局部公式和付款系数，并保留来源和生效日期。 */
+export interface DuctTonPrices {
+	ton_price: string;
+	source_cell?: string;
+	ton_prices?: Record<string, string>;
+	source_cells?: Record<string, string>;
+}
+export interface PurchasedDuctFlange {
+	name: string;
+	material: string;
+	size: string;
+	unit: string;
+	price_basis: string;
+	prices_per_m: Record<string, string>;
+	source_cells: Record<string, string>;
+}
 export interface CatalogBody {
 	name: string;
 	source: string;
 	effective_from: string;
 	effective_to: string;
 	company_id: string;
-	materials: { name: string; material: string; thickness: string; ton_price: string; source_cell?: string; unit: string }[];
-	flanges: { name: string; material: string; size: number; grade: string; ton_price: string; processing_per_m: string; unit: string }[];
+	price_regions?: string[];
+	regional_price_source?: string;
+	black_flange_regions?: string[];
+	purchased_flanges?: PurchasedDuctFlange[];
+	materials: ({ name: string; material: string; thickness: string; unit: string } & DuctTonPrices)[];
+	flanges: ({ name: string; material: string; size: number; grade: string; processing_per_m: string; unit: string } & DuctTonPrices)[];
 	rates: Record<string, string>;
 	expressions: Record<string, string>;
 	payment_terms: PaymentTerm[];
@@ -815,7 +1039,27 @@ export interface EquipmentPrice {
 	source?: string;
 }
 /** 设备生效指标正文，包含成本费率、运费地区、付款条件、材料电机价格、风机工况及各类产品参数与源文件哈希。 */
+export interface FireWrapMaterial {
+	id: string;
+	name: string;
+	type: string;
+	thickness: string;
+	density: string;
+	sale_price: string;
+	installation_group: string;
+	source_cell: string;
+	note: string;
+}
+export interface FireWrapSalesData {
+	source: string;
+	scope: 'national';
+	price_basis: 'sale';
+	markup_per_sqm: string;
+	materials: FireWrapMaterial[];
+	installation_prices: { glass: string; board: string };
+}
 export interface EquipmentCatalogBody {
+	fire_wrap_sales?: FireWrapSalesData;
 	fan_selection?: 'range-v1';
 	fan_data_batch?: string;
 	fan_source_files?: { file: string; sha256: string }[];
@@ -824,6 +1068,8 @@ export interface EquipmentCatalogBody {
 	source: string;
 	/** 标识后端提供的百叶调价批次，避免旧后端价格被误认为最新价。 */
 	louver_price_batch?: string;
+	/** 蛋格带网、带阀相对普通款完整供货单价的倍率，独立于面积成本倍率；安装另算。 */
+	louver_supply_factors?: Record<string, string>;
 	/** 单层消声器、静压箱未税成本（元/㎡）；缺失时为旧指标，双层仍使用 rates.double_layer_rate。 */
 	acoustic_region_costs?: Record<string, { silencer: string; plenum: string }>;
 	effective_from: string;

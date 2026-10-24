@@ -38,7 +38,10 @@
 			<el-table-column prop="row_count" label="项目数" width="85" />
 			<el-table-column label="报价总额（元）" min-width="155" align="right"
 				><template #default="{ row }"
-					><span class="q-number">{{ money(row.total, row.pricing_mode === 'equipment_v1' ? 0 : 1) }}</span></template
+					><el-tooltip v-if="row.result_review_required" content="规则目录有更新，打开报价后核对；未受影响时会恢复显示原报价总额。" placement="top">
+						<el-tag type="warning" size="small" effect="plain">待核对</el-tag>
+					</el-tooltip>
+					<span v-else class="q-number">{{ money(row.total, row.pricing_mode === 'equipment_v1' ? 0 : 1) }}</span></template
 				></el-table-column
 			>
 			<el-table-column label="操作" width="220" fixed="right"
