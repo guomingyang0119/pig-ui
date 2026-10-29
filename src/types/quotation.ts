@@ -106,6 +106,10 @@ export interface ProductRuleBody {
 	category?: string;
 	unit: string;
 	aliases: string[];
+	/** 只有明确开启才允许在内置规则无法处理时自动补缺；历史缺字段及新规则默认仅供人工选择。 */
+	automatic_fallback?: boolean;
+	/** 仅当前产品规则的1∶1计数单位对应；不改变客户原单位或整行数量。 */
+	unit_aliases?: string[];
 	canonical_name?: string;
 	attributes: Record<string, string>;
 	conditions: Record<string, string>;
@@ -364,6 +368,13 @@ export interface AiRetrySuggestion {
 	evidence: string;
 	message: string;
 	verified: boolean;
+	adoptable?: boolean;
+	review_policy?: string;
+	review_level?: 'format' | 'review' | 'conflict';
+	review_fields?: string[];
+	warnings?: string[];
+	raw_candidate?: Record<string, unknown>;
+	source?: Record<string, unknown>;
 	automatic: boolean;
 	used_features: boolean;
 	product_rule?: ProductRuleBody;
@@ -393,7 +404,7 @@ export interface AiRetryReport {
 }
 export interface QuoteBody {
 	_input_view?: 'workbench_compact';
-	excel_parameter_review?: { filename: string; calculated_at: string; input_results: ExcelInputResult[] };
+	excel_parameter_review?: { filename: string; calculated_at: string; input_results: ExcelInputResult[]; changes?: ReviewImportChange[] };
 	ai_retry_report?: AiRetryReport;
 	project_region?: string;
 	project_region_confirmed?: boolean;
@@ -586,6 +597,7 @@ export interface ReviewImportChange {
 
 /** 回导预览的完整可见产品行，保留原字段值、变更列表、派生字段和待确认状态，便于与 Excel 逐行对照。 */
 export interface ReviewImportRow {
+	source_row_id?: string;
 	scope?: 'quoted' | 'excluded' | 'installation_only';
 	scope_restore_required?: boolean;
 	candidate_values?: Record<string, string>;
@@ -843,6 +855,8 @@ export interface Catalog<T = CatalogBody> {
 	kind: string;
 	status: string;
 	body: T;
+	/** 服务端只读核对结果，不属于规则正文，也不代表已修改历史规则。 */
+	auto_scope_review?: { enabled: boolean; names: string[]; issues: string[] };
 }
 /** Excel 工作表解析结果：来源行号/单元格保留原表，建议与自动映射供用户核对；上下文行和辅助表不另计产品。 */
 export interface ImportSheet {

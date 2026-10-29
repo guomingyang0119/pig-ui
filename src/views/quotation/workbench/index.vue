@@ -9,7 +9,7 @@
 				</div>
 				<div class="q-toolbar" v-if="canEdit">
 					<el-badge is-dot :hidden="!hasDraftProductRules">
-						<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleDialog?.open()">产品规则管理</el-button>
+						<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleManager?.open()">产品规则管理</el-button>
 					</el-badge>
 					<el-button @click="createBlank()">新建报价</el-button>
 					<el-button @click="aiImportDialog?.open()">AI整理资料并建草稿</el-button>
@@ -72,6 +72,11 @@
 					<el-button v-else-if="!locked" type="primary" @click="save(true)" :loading="saving" :disabled="busy || aiInputBusy">保存并试算</el-button>
 				</div>
 			</header>
+			<el-alert v-if="pendingExcelParameters" type="warning" :closable="false" show-icon title="Excel参数仅完成预览，尚未保存到报价">
+				<p>有 {{ reviewPreview?.changed_row_count }} 个产品的修改待处理；普通保存、试算和导出会先返回本次回导确认。</p>
+				<el-button link type="primary" :disabled="busy" @click="openPendingExcelReview">返回回导确认</el-button>
+				<el-button link type="danger" :disabled="busy" @click="discardExcelReview">放弃本次回导</el-button>
+			</el-alert>
 			<el-alert
 				v-if="aiReviewRequired"
 				type="warning"
@@ -361,7 +366,7 @@
 					</div>
 					<div v-if="!locked" class="q-toolbar">
 						<el-badge is-dot :hidden="!hasDraftProductRules">
-							<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleDialog?.open()">产品规则管理</el-button>
+							<el-button :title="productRulesNotice" :aria-label="productRulesNotice" @click="productRuleManager?.open()">产品规则管理</el-button>
 						</el-badge>
 						<el-button :disabled="editLocked" @click="autoClassify">重新识别清单</el-button>
 						<el-button :disabled="editLocked || !batchRows.length" @click="batchParameterDialog?.open()"
@@ -786,9 +791,10 @@
 			:load-row-input="loadRowInput"
 			:requires-ai-review="!!quote?.body.ai_review_status"
 			:on-apply="applyProductRule"
-			:on-published="previewPublishedRule"
 			@rules-changed="productRulesChanged"
 		/>
+		<ProductRuleManagerDialog :key="'manager-' + quoteEditorSession" ref="productRuleManager"
+			:on-published="quote ? previewPublishedRule : undefined" @rules-changed="productRulesChanged" />
 		<el-dialog
 			v-model="ruleMatchesOpen"
 			title="正式规则 · 当前清单匹配与试算"
@@ -930,7 +936,7 @@
 		<input ref="reviewFile" type="file" accept=".xlsx" hidden @change="previewReviewFile" />
 		<el-dialog
 			v-model="reviewDialog"
-			title="确认回导人工报价"
+			:title="reviewPreview?.input_recalculated ? '确认保存Excel参数 · 仅预览，尚未保存' : '确认回导人工报价'"
 			width="min(1500px, 96vw)"
 			top="4vh"
 			class="review-import-dialog"
@@ -969,7 +975,7 @@
 				<el-alert
 					:title="
 						reviewPreview.input_recalculated
-							? `已按修改后的参数预试算，仍有 ${reviewPreview.pending_count} 项待确认。确认导回后统一保存参数并重新试算。`
+							? `仅预览，尚未保存。已按新参数预试算，仍有 ${reviewPreview.pending_count} 项待确认；点击“保存参数并重新试算”后才写入报价。`
 							: reviewPreview.pending_count
 							? `仍有 ${reviewPreview.pending_count} 行价格未补全，回导后仍不能生成正式报价。`
 							: `共识别 ${reviewPreview.change_count} 处修改，回导后付款前合计为 ${money(reviewPreview.before_payment_total)} 元。`
@@ -977,6 +983,17 @@
 					:type="reviewPreview.pending_count ? 'warning' : 'success'"
 					:closable="false"
 				/>
+				<section v-if="reviewPreview.input_recalculated" class="review-import-section">
+					<div class="review-import-heading"><h3>本次输入修改</h3><span>空值显示为“未填写”，0表示明确填写的零值。</span></div>
+					<p v-if="reviewPreview.changes_truncated" class="q-muted">以下显示前200处变更；确认保存会应用本次文件的全部修改。</p>
+					<el-table :data="excelParameterChanges" border max-height="280">
+						<el-table-column prop="line" label="Excel行" width="85" />
+						<el-table-column prop="product" label="产品" min-width="180" />
+						<el-table-column prop="label" label="修改字段" min-width="140" />
+						<el-table-column label="原值" min-width="150"><template #default="{ row }">{{ row.before === '' ? '未填写' : row.before }}</template></el-table-column>
+						<el-table-column label="新值" min-width="150"><template #default="{ row }"><strong>{{ row.after === '' ? '未填写' : row.after }}</strong></template></el-table-column>
+					</el-table>
+				</section>
 				<ExcelReviewResults v-if="reviewPreview.input_recalculated" :rows="reviewPreview.input_results || []" @locate="locateExcelRow" />
 				<p v-if="reviewPreview.input_recalculated" class="q-muted">{{ reviewPreview.calculation_issues?.join('；') }}</p>
 				<div class="review-import-summary">
@@ -1049,7 +1066,8 @@
 				<p v-if="!reviewPreview.change_count" class="review-import-empty">没有检测到人工修改，请确认上传的是填写后的校对版。</p>
 			</template>
 			<template #footer>
-				<el-button :disabled="busy" @click="reviewDialog = false">取消</el-button>
+				<el-button v-if="pendingExcelParameters" :disabled="busy" type="danger" plain @click="discardExcelReview">放弃本次回导</el-button>
+				<el-button :disabled="busy" @click="reviewDialog = false">{{ pendingExcelParameters ? '稍后处理' : '取消' }}</el-button>
 				<el-button
 					type="primary"
 					:loading="busy"
@@ -1061,7 +1079,7 @@
 						reviewPriceChoices.some((choice) => !choice.reason.trim())
 					"
 					@click="applyReviewFile"
-					>确认回导 {{ reviewPreview?.changed_row_count || 0 }} 个产品</el-button
+					>{{ reviewPreview?.input_recalculated ? '保存参数并重新试算' : `确认回导 ${reviewPreview?.changed_row_count || 0} 个产品` }}</el-button
 				>
 			</template>
 		</el-dialog>
@@ -1542,12 +1560,14 @@ import type {
 	AiReviewPreview,
 } from '/@/types/quotation';
 import ProductRuleDialog from './ProductRuleDialog.vue';
+import ProductRuleManagerDialog from './ProductRuleManagerDialog.vue';
+import { productUnitForRow } from './productRuleUnits';
 import SourceCompareDialog from './SourceCompareDialog.vue';
 import ProductNameReview from './ProductNameReview.vue';
 import AiRetryDialog from './AiRetryDialog.vue';
 import AiReviewIssuesDialog from './AiReviewIssuesDialog.vue';
 import { failedAssistRows } from './failedQuoteAssist';
-import { importIssueLabels } from './importReview';
+import { excelInputChanges, excelReviewApplied, importIssueLabels } from './importReview';
 import { featureParameterEvidence, hasFeatureParameters, rowSpecPlaceholder } from './featureParameterDisplay';
 import BatchParameterDialog from './BatchParameterDialog.vue';
 import QuoteScopeDialog from './QuoteScopeDialog.vue';
@@ -1639,6 +1659,7 @@ const rowModifications = new WeakMap<QuoteRow, ComputedRef<boolean>>();
 const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	aiImportDialog = ref<InstanceType<typeof AiImportDialog>>(),
 	productRuleDialog = ref<InstanceType<typeof ProductRuleDialog>>(),
+	productRuleManager = ref<InstanceType<typeof ProductRuleManagerDialog>>(),
 	productRules = ref<Catalog<ProductRuleBody>[]>([]),
 	productRuleDraftCount = ref<number>(),
 	productRulesLoadState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle'),
@@ -1664,6 +1685,30 @@ const importDialog = ref<InstanceType<typeof ImportDialog>>(),
 	productPage = ref(1),
 	productPageSize = ref(50),
 	sections = ref(['conditions']);
+const pendingExcelParameters = computed(() => !!reviewPreview.value?.input_recalculated && reviewPreview.value.change_count > 0
+	&& !!quote.value && reviewTarget.value?.id === quote.value.id);
+const excelParameterChanges = computed(() => excelInputChanges(reviewPreview.value?.changes || []));
+function openPendingExcelReview() {
+	drawer.value = false;
+	excelResultDialog.value = false;
+	reviewDialog.value = true;
+}
+function requireExcelReviewApplied() {
+	if (!pendingExcelParameters.value) return true;
+	ElMessage.warning('尚有Excel参数未保存，请先确认回导或明确放弃本次修改');
+	openPendingExcelReview();
+	return false;
+}
+async function discardExcelReview() {
+	if (busy.value || !pendingExcelParameters.value) return;
+	const preview = reviewPreview.value;
+	try { await confirm('确认放弃本次尚未保存的Excel参数修改？报价将保留当前已保存的内容。'); }
+	catch { return; }
+	if (reviewPreview.value !== preview || busy.value) return;
+	reviewPreview.value = undefined;
+	reviewTarget.value = undefined;
+	reviewDialog.value = false;
+}
 const hasDraftProductRules = computed(() => (productRuleDraftCount.value ?? productRules.value.filter((rule) => rule.status === 'draft').length) > 0);
 const productRulesNotice = computed(() => {
 	if (productRulesLoadState.value === 'idle') return '产品规则管理：点击查看规则及待处理草稿。';
@@ -2281,7 +2326,7 @@ async function applyProductRule(definition: { body: ProductRuleBody; family?: st
 		delete row.product_rule_family;
 	}
 	if (body.category) row.category = body.category;
-	row.unit = body.unit;
+	row.unit = productUnitForRow(body, row.unit);
 	if (body.rule_type !== 'alias' && body.unit === '㎡' && !row.quantity) row.quantity = row.engineering_quantity;
 	selected.value = index;
 	drawer.value = false;
@@ -2569,6 +2614,7 @@ async function createBlank() {
 /** 保存可选地继续试算：应用权威正文与修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
 async function save(calculate: boolean, onFailure?: (message: string) => void) {
 	if (!quote.value || saving.value) return false;
+	if (!requireExcelReviewApplied()) return false;
 	const currentPage = quotePage();
 	if (calculate && projectRegionIssue(quote.value.body)) {
 		onFailure?.(projectRegionIssue(quote.value.body));
@@ -2710,6 +2756,7 @@ async function confirmAiSources(rowIds: string[]) {
 /** 核验前先保存并收集全部问题；阻断项集中处理，待核对提示必须在当前版本显式确认。 */
 async function approveAi(acceptWarnings = false) {
 	if (!quote.value || locked.value || !quote.value.body.ai_review_status || busy.value || saving.value || reviewingAi.value || aiInputBusy.value) return;
+	if (!requireExcelReviewApplied()) return;
 	if (projectRegionIssue(quote.value.body)) {
 		ElMessage.warning(projectRegionIssue(quote.value.body));
 		return;
@@ -2764,6 +2811,7 @@ async function approveAi(acceptWarnings = false) {
 /** 未核验草稿显式预试算：保留原始异常与 pending 状态，服务端继续禁止正式导出。 */
 async function previewAiCalculation() {
 	if (!quote.value || locked.value || !quote.value.body.ai_review_status || busy.value || saving.value || reviewingAi.value || aiInputBusy.value) return;
+	if (!requireExcelReviewApplied()) return;
 	if (projectRegionIssue(quote.value.body)) {
 		ElMessage.warning(projectRegionIssue(quote.value.body));
 		return;
@@ -2944,6 +2992,7 @@ async function revise() {
 /** 生成后直接下载文件并更新轻量版本摘要，避免重新读取整份报价造成下载等待或失败。 */
 async function exportQuote(kind: string) {
 	if (!quote.value || exporting.value) return;
+	if (!requireExcelReviewApplied()) return;
 	const target = quote.value;
 	const currentPage = quotePage();
 	exporting.value = kind;
@@ -3040,8 +3089,12 @@ async function previewReviewFile(event: Event) {
 async function applyReviewFile() {
 	if (busy.value || !quote.value || !reviewPreview.value?.change_count || !allScopeRestorationsConfirmed.value) return;
 	if (!ordinaryReviewReady()) return;
-	if (dirty.value || reviewTarget.value?.id !== quote.value.id || reviewTarget.value.revision !== quote.value.revision) {
-		ElMessage.warning('当前报价已有变化，请保存后重新上传校对版');
+	if (dirty.value) {
+		ElMessage.warning('页面有未保存修改。请撤销页面修改后确认回导，或放弃本次回导后保存页面并重新导出填写。');
+		return;
+	}
+	if (reviewTarget.value?.id !== quote.value.id || reviewTarget.value.revision !== quote.value.revision) {
+		ElMessage.warning('报价版本已变化，请放弃本次回导，重新导出并填写校对版后再上传。');
 		return;
 	}
 	if (reviewPreview.value.location_changed && !keepSystemLocation.value) return;
@@ -3053,6 +3106,7 @@ async function applyReviewFile() {
 		currentPage = quotePage(),
 		input = JSON.stringify(target.body),
 		preview = reviewPreview.value;
+	const previousRevision = target.revision;
 	busy.value = true;
 	try {
 		const learning = installationLearningPanel.value?.selection() || { rules: [], publish: false };
@@ -3066,8 +3120,16 @@ async function applyReviewFile() {
 			learning.publish,
 			reviewPriceChoices.value
 		);
-		if (!(await applyMutation(target, applied, true, input, currentPage))) return;
+		// 参数应用响应可能尚未带上另行保存的回导报告，沿用详情回读路径核实实际写入。
+		const response = preview.input_recalculated ? { revision: applied.revision } : applied;
+		if (!(await applyMutation(target, response, true, input, currentPage))) return;
+		if (preview.input_recalculated && !excelReviewApplied(quote.value!, preview, previousRevision)) {
+			ElMessage.warning('服务端返回的报价未能确认本次参数已经保存，请重新打开报价核对；当前回导预览已保留');
+			return;
+		}
 		reviewDialog.value = false;
+		reviewPreview.value = undefined;
+		reviewTarget.value = undefined;
 		if (applied.installation_rules?.length) {
 			try {
 				await refreshProductRules();
@@ -3102,9 +3164,9 @@ async function download(item: ExportRecord) {
 }
 /** 报价正文与已保存基线不同时，确认是否放弃修改；取消保持当前编辑页面。 */
 async function leave() {
-	if (!dirty.value) return true;
+	if (!dirty.value && !pendingExcelParameters.value) return true;
 	try {
-		await confirm('有未保存的修改，确定离开并放弃这些修改？');
+		await confirm(pendingExcelParameters.value ? '有尚未保存的Excel参数回导预览，离开将放弃该预览及其他未保存修改。确定离开？' : '有未保存的修改，确定离开并放弃这些修改？');
 		return true;
 	} catch {
 		return false;
@@ -3116,7 +3178,7 @@ async function back() {
 }
 /** 关闭浏览器或刷新时提示未保存报价输入，补充路由跳转之外的离开保护。 */
 function beforeUnload(event: BeforeUnloadEvent) {
-	if (dirty.value) {
+	if (dirty.value || pendingExcelParameters.value) {
 		event.preventDefault();
 		event.returnValue = '';
 	}

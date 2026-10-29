@@ -7,6 +7,7 @@ import type {
 	CatalogBody,
 	EquipmentCatalogBody,
 	InstallationCatalogBody,
+	InstallationProject,
 	ExportRecord,
 	ImportResult,
 	Quote,
@@ -71,6 +72,12 @@ export const quoteApi = {
 	}[] }>(`/quotes/${id}/ai-assist`, 'post', { revision, row_ids: rowIds }, 1230000),
 	/** 查询可见产品规则版本，包含草稿、发布与停用状态，供行匹配和通用管理使用。 */
 	productRules: () => call<Catalog<ProductRuleBody>[]>('/product-rules'),
+	/** 草稿编辑只读取通用模板和项目，不执行产品推荐或读取报价行。 */
+	productRuleEditorOptions: () => call<{
+		templates: ProductRuleBody[];
+		catalog_rates: { key: string; label: string }[];
+		installation_projects: InstallationProject[];
+	}>('/product-rules/editor-options'),
 	/** 负责人首页仅读取待发布数量，不为提醒下载规则正文。 */
 	productRuleSummary: () => call<{ draft_count: number }>('/product-rules/summary'),
 	/** 只读匹配，复用服务端名称、单位、条件与冲突判断，不改变清单。 */
