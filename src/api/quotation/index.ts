@@ -1,6 +1,7 @@
 /** 报价系统 HTTP 接口集中封装：复用 pig 登录与请求处理，统一使用 /admin/quotation 路径；版本变更请求携带 revision 供后端检查并发修改。 */
 import request from '/@/utils/request';
 import { configureEquipmentParameters } from '/@/views/quotation/equipment';
+import type { FanAirflowUnitReport, FanAirflowUnitDecision } from '/@/views/quotation/workbench/fanAirflowUnitReview';
 import type { EquipmentParameterDefinitions } from '/@/views/quotation/equipment';
 import type {
 	Catalog,
@@ -38,6 +39,8 @@ import type {
 	AiImportLimits,
 	AiRetryReport,
 	AiReviewPreview,
+	QuoteOperationStatus,
+	ImportPreview,
 } from '/@/types/quotation';
 
 /** 后端统一响应外层，业务数据位于 data；成功与错误处理继续遵循公共 request 拦截器。 */
@@ -48,6 +51,8 @@ interface Result<T> {
 }
 /** 新后端直接返回规范后的报价正文；可选字段兼容部署期间的旧版接口。 */
 export interface QuoteMutationResult {
+	operation?: QuoteOperationStatus;
+	operation_replayed?: boolean;
 	revision: number;
 	body?: QuoteBody;
 	state?: Quote['state'];
@@ -61,6 +66,10 @@ async function call<T>(path: string, method = 'get', data?: unknown, timeout?: n
 	return response.data;
 }
 export const quoteApi = {
+	fanAirflowUnitReviews: (id: string) => call<FanAirflowUnitReport>(`/quotes/${id}/fan-airflow-unit-reviews`),
+	confirmFanAirflowUnits: (id: string, revision: number, decisions: FanAirflowUnitDecision[], replaceManualReview = false, compact = false) =>
+		call<{ quote: QuoteMutationResult; review: FanAirflowUnitReport }>(`/quotes/${id}/fan-airflow-unit-reviews`, 'post',
+			{ revision, decisions, replace_manual_review: replaceManualReview, response_view: compact ? 'workbench_compact' : 'workbench' }, 120000),
 	aiRetry: (id: string, revision: number, rowIds: string[], includeFeatures = false, reportId?: string) =>
 		call<{ revision: number; report: AiRetryReport; request_error: string }>(`/quotes/${id}/ai-retry`, 'post',
 			{ revision, row_ids: rowIds, include_features: includeFeatures, report_id: reportId }, 1230000),
@@ -119,9 +128,12 @@ export const quoteApi = {
 	/** 保存指定规则草稿，提交旧 revision 防止覆盖其他页面的修改。 */
 	saveProductRule: (item: Catalog<ProductRuleBody>, body: ProductRuleBody) =>
 		call<{ revision: number }>('/product-rules/' + item.id, 'put', { revision: item.revision, body }),
-	/** 执行规则修订、校验、发布、停用或删除，动作与修订号交由后端校验。 */
-	productRuleAction: (item: Catalog<ProductRuleBody>, action: 'revise' | 'trial' | 'publish' | 'retire' | 'delete') =>
+	/** 执行规则修订、校验、发布、停用、归档、恢复或删除，动作与修订号交由后端校验。 */
+	productRuleAction: (item: Catalog<ProductRuleBody>, action: 'revise' | 'trial' | 'publish' | 'retire' | 'delete' | 'archive' | 'restore') =>
 		call<{ id?: string; revision?: number; message?: string }>('/product-rules/' + item.id + '/' + action, 'post', { revision: item.revision }),
+	/** 一次归档选中的已停用规则，传递修订号防止旧页面覆盖新状态。 */
+	archiveProductRules: (items: Catalog<ProductRuleBody>[]) =>
+		call<{ count: number }>('/product-rules/archive', 'post', { rules: items.map(item => ({ id: item.id, revision: item.revision })) }),
 	/** 查询风管、设备与安装等指标版本；泛型用于各面板读取对应正文结构。 */
 	resources: async <T = CatalogBody>() => {
 		const [resources, settings] = await Promise.all([call<Catalog<T>[]>('/resources'), call<QuoteSettings & { parameter_definitions?: EquipmentParameterDefinitions }>('/settings')]);
@@ -159,8 +171,8 @@ export const quoteApi = {
 	/** 保留完整可编辑字段，原表重字段仅在当前行需要时读取。 */
 	rowInput: (id: string, rowId: string, revision: number) =>
 		call<RowInputResult>(`/quotes/${id}/rows/${encodeURIComponent(rowId)}/input?revision=${revision}`),
-	patch: (id: string, patch: QuotePatch) => call<QuoteMutationResult>('/quotes/' + id, 'patch',
-		{ ...patch, response_view: 'workbench_compact' }),
+	patch: (id: string, patch: QuotePatch, operationId?: string, background = false) => call<QuoteMutationResult>('/quotes/' + id, 'patch',
+		{ ...patch, ...(operationId ? { operation_id: operationId } : {}), ...(background ? { validation_mode: 'background' } : {}), response_view: 'workbench_compact' }, 180000),
 	/** 历史缺少行标识时保留只读完整接口，避免通过空行标识读取。 */
 	fullDetail: (id: string) => call<Quote>('/quotes/' + id),
 	/** 只读取指定报价修订中当前一行的完整计算过程。 */
@@ -168,10 +180,17 @@ export const quoteApi = {
 		call<RowCalculationResult>(`/quotes/${id}/rows/${encodeURIComponent(rowId)}/calculation?revision=${revision}`),
 	/** 手工或按导入计划创建新报价草稿，返回编号供工作台打开。 */
 	create: (data: Record<string, unknown> = {}) => call<{ id: string }>('/quotes', 'post', { project_region: '', project_region_confirmed: false, different_delivery_region: false, delivery_region: '', ...data }),
+	previewImport: (id: string, data: Record<string, unknown>) => call<ImportPreview>('/imports/' + id + '/preview', 'post', data),
+	operationStatus: (id: string, operationId: string) => call<QuoteOperationStatus>('/quotes/' + id + '/operations/' + operationId),
 	/** 保存报价正文与当前修订号，后端生成/保留行标识并使旧结果失效。 */
-	save: (id: string, body: QuoteBody, revision: number) => call<QuoteMutationResult>('/quotes/' + id, 'put', { ...body, revision, response_view: 'workbench' }),
+	save: (id: string, body: QuoteBody, revision: number, operationId?: string, background = false) => call<QuoteMutationResult>('/quotes/' + id, 'put', { ...body, revision, ...(operationId ? { operation_id: operationId } : {}), ...(background ? { validation_mode: 'background' } : {}), response_view: 'workbench' }, 180000),
+	startCalculation: (id: string, revision: number, operationId: string, replaceManualReview = false, previewAi = false) =>
+		call<import('/@/types/quotation').QuoteCalculationJob>(`/quotes/${id}/calculation-jobs`, 'post', { revision, operation_id: operationId, replace_manual_review: replaceManualReview, preview_ai: previewAi }),
+	calculationStatus: (id: string, jobId: string) => call<import('/@/types/quotation').QuoteCalculationJob>(`/quotes/${id}/calculation-jobs/${jobId}`),
+	currentCalculation: (id: string) => call<import('/@/types/quotation').QuoteCalculationJob | null>(`/quotes/${id}/calculation-jobs/current`),
+	cancelCalculation: (id: string, jobId: string) => call<import('/@/types/quotation').QuoteCalculationJob>(`/quotes/${id}/calculation-jobs/${jobId}/cancel`, 'post', {}),
 	/** 基于已经保存的版本试算整单，返回计算结果和新修订号，待确认项目由引擎显式保留。 */
-	calculate: (id: string, revision: number, replaceManualReview = false, previewAi = false, compact = false) => call<QuoteMutationResult>('/quotes/' + id + '/calculate', 'post', { revision, replace_manual_review: replaceManualReview, response_view: compact ? 'workbench_compact' : 'workbench', ...(previewAi ? { preview_ai: true } : {}) }),
+	calculate: (id: string, revision: number, replaceManualReview = false, previewAi = false, compact = false, operationId?: string) => call<QuoteMutationResult>('/quotes/' + id + '/calculate', 'post', { revision, replace_manual_review: replaceManualReview, response_view: compact ? 'workbench_compact' : 'workbench', ...(previewAi ? { preview_ai: true } : {}), ...(operationId ? { operation_id: operationId } : {}) }, 180000),
 	/** 执行报价修订、归档、恢复或删除等状态动作，修订可能返回新报价编号。 */
 	action: (id: string, revision: number, action: string) => call<{ id?: string }>('/quotes/' + id + '/' + action, 'post', { revision }),
 	/** 重新识别已保存草稿中的产品行，返回风管、设备和待识别数量，不补入未导入的工作表。 */

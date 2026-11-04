@@ -76,7 +76,7 @@ service.interceptors.request.use(
  */
 const handleResponse = (response: AxiosResponse<any>) => {
 	if (response.data.code === 1) {
-		throw { ...response.data, msg: response.data.msg || '服务处理失败，但未返回具体原因' };
+		throw { ...response.data, status: response.status, msg: response.data.msg || '服务处理失败，但未返回具体原因' };
 	}
 
 	// 针对密文返回解密
@@ -113,10 +113,11 @@ service.interceptors.response.use(handleResponse, (error) => {
 	}
 
 	const body = error.response?.data;
-	if (body && typeof body === 'object' && (body.msg || body.message)) return Promise.reject(body);
+	if (body && typeof body === 'object' && (body.msg || body.message)) return Promise.reject({ ...body, status });
 	const text = typeof body === 'string' && !body.trim().startsWith('<') ? body.trim().slice(0, 200) : '';
+	const recognition = /\/quotation\/(?:ai-imports(?:[/?]|$)|quotes\/[^/]+\/ai-assist(?:[/?]|$))/.test(error.config?.url || '');
 	const message = text || (status === 413 ? '上传文件过大（HTTP 413）'
-		: status === 504 ? '识别请求超时（HTTP 504）'
+		: status === 504 ? (recognition ? '识别请求等待超时（HTTP 504）' : '请求等待超时（HTTP 504）')
 			: status ? `请求失败（HTTP ${status}）` : error.message || '无法连接报价服务');
 	return Promise.reject({ msg: message, status });
 });

@@ -72,6 +72,17 @@
 					<el-button v-else-if="!locked" type="primary" @click="save(true)" :loading="saving" :disabled="busy || aiInputBusy">保存并试算</el-button>
 				</div>
 			</header>
+			<el-alert v-if="pendingOperation?.quoteId === quote.id" type="warning" :closable="false" :title="operationNotice || '保存或试算结果待核对'">
+				<el-button :loading="checkingOperation" @click="checkPendingOperation">继续核对结果</el-button>
+				<el-button :disabled="checkingOperation || saving" @click="reviewCurrentVersion">核对当前版本后继续编辑</el-button>
+			</el-alert>
+			<el-alert v-if="backgroundJob || pendingCalculationRequest" :type="backgroundJob?.state === 'completed' ? 'success' : 'info'" :closable="false"
+				:title="backgroundNotice || (backgroundJob ? calculationMessage(backgroundJob) : '试算任务提交结果待核对，输入已保存。')">
+				<p v-if="backgroundJob?.error_message">{{ backgroundJob.error_message }}</p>
+				<el-button :loading="checkingCalculation" @click="checkBackgroundCalculation">继续核对任务</el-button>
+				<el-button v-if="backgroundJob && ['queued', 'running'].includes(backgroundJob.state)" :disabled="checkingCalculation" @click="cancelBackgroundCalculation">取消本次试算</el-button>
+			</el-alert>
+			<el-alert v-else-if="quote.body.input_validation === 'pending'" type="info" :closable="false" title="输入已保存，尚未完成完整核验；请提交试算后核对结果。" />
 			<el-alert v-if="pendingExcelParameters" type="warning" :closable="false" show-icon title="Excel参数仅完成预览，尚未保存到报价">
 				<p>有 {{ reviewPreview?.changed_row_count }} 个产品的修改待处理；普通保存、试算和导出会先返回本次回导确认。</p>
 				<el-button link type="primary" :disabled="busy" @click="openPendingExcelReview">返回回导确认</el-button>
@@ -113,10 +124,10 @@
 				title="此版本已锁定。查看或下载历史文件；修改内容请先创建修订版。"
 			/>
 			<el-alert
-				v-if="quote.result_stale && quote.body.include_freight != null"
+				v-if="quote.result_stale && quote.body.include_freight != null && !pendingOperation"
 				type="warning"
 				:closable="false"
-				title="运算规则已更新，当前结果不能继续导出，请重新试算。"
+				title="当前结果已失效，不能继续导出，请核对输入并重新试算。"
 			/>
 			<el-alert
 				v-if="catalogsLoaded && isAuto && hasDuctRows && !activeCatalog"
@@ -376,6 +387,7 @@
 							>AI辅助识别失败项目（{{ failedAssistTargets.length }}）</el-button
 						>
 						<el-button :disabled="editLocked || !batchRows.length" @click="scopeDialog?.open(batchRows)">批量设置范围</el-button>
+						<el-button :disabled="dirty || editLocked" @click="fanAirflowUnitDialog?.open()">风量单位核对／查看记录</el-button>
 						<el-button :disabled="editLocked" @click="addRow">＋ 添加项目</el-button>
 					</div>
 					<el-button v-if="quote.body.ai_retry_report" :disabled="busy || saving" @click="aiRetryDialog?.open(true)"
@@ -895,6 +907,7 @@
 			@edit="openRow"
 		/>
 		<BatchParameterDialog :key="quoteEditorSession" ref="batchParameterDialog" :rows="batchRows" :locked="editLocked" @applied="batchApplied" />
+		<FanAirflowUnitDialog v-if="quote" :key="quoteEditorSession" ref="fanAirflowUnitDialog" :quote="quote" :dirty="dirty" :locked="editLocked" :apply-batch="applyFanAirflowUnits" @locate="locateAiRetryRow" />
 		<AiReviewIssuesDialog
 			v-if="quote"
 			v-model="aiReviewIssuesOpen"
@@ -1165,6 +1178,7 @@
 					<el-button link type="primary" @click="reloadRowCalculation">重试读取</el-button>
 				</div>
 				<ProductNameReview :review="currentProductNameReview(selectedRow)" />
+				<el-button v-if="selectedRow.category === '风机' || selectedRow.attributes.equipment_kind === 'fan'" :disabled="dirty || busy || saving" type="primary" plain @click="fanAirflowUnitDialog?.open(selectedRow.row_id ? [selectedRow.row_id] : [])">核对风量单位／查看确认记录</el-button>
 				<section v-if="selectedRow.import_review || hasFeatureParameters(selectedRow)" class="q-section">
 					<p v-if="selectedRow.import_review?.section">所属章节：{{ selectedRow.import_review.section }}</p>
 					<p v-if="selectedRow.import_review?.dimension_expression">原尺寸区间：{{ selectedRow.import_review.dimension_expression }}</p>
@@ -1544,6 +1558,11 @@ import { ElMessage } from 'element-plus';
 import { auth } from '/@/utils/authFunction';
 import { quoteApi } from '/@/api/quotation';
 import type { QuoteMutationResult } from '/@/api/quotation';
+import { executeQuoteOperation, newOperationId, rememberOperation, readOperation, forgetOperation } from './quoteOperationRecovery';
+import type { PendingQuoteOperation } from './quoteOperationRecovery';
+import { submitCalculationOnce, rememberCalculation, pendingCalculation, forgetCalculation, recoverableCalculation, sameCalculation, calculationMessage, canApplyCalculation } from './backgroundCalculation';
+import type { PendingCalculation } from './backgroundCalculation';
+import type { QuoteCalculationJob } from '/@/types/quotation';
 import { money, stateLabels, report, confirm, blankRow, rowFields, flangeTypes, shapes, productStates } from '/@/views/quotation/shared';
 import InstallationLearningPanel from './InstallationLearningPanel.vue';
 const installationLearningPanel = ref<InstanceType<typeof InstallationLearningPanel>>();
@@ -1570,6 +1589,8 @@ import { failedAssistRows } from './failedQuoteAssist';
 import { excelInputChanges, excelReviewApplied, importIssueLabels } from './importReview';
 import { featureParameterEvidence, hasFeatureParameters, rowSpecPlaceholder } from './featureParameterDisplay';
 import BatchParameterDialog from './BatchParameterDialog.vue';
+import FanAirflowUnitDialog from './FanAirflowUnitDialog.vue';
+import type { FanAirflowUnitReport, FanAirflowUnitDecision } from './fanAirflowUnitReview';
 import QuoteScopeDialog from './QuoteScopeDialog.vue';
 import {
 	filterQuoteRows,
@@ -1640,6 +1661,82 @@ const quote = ref<Quote>(),
 	saving = ref(false),
 	reviewingAi = ref(false),
 	failed = ref(false);
+const pendingOperation = ref<PendingQuoteOperation>(), operationNotice = ref(''), checkingOperation = ref(false);
+const backgroundJob = ref<QuoteCalculationJob>(), pendingCalculationRequest = ref<PendingCalculation>(), backgroundNotice = ref(''), checkingCalculation = ref(false);
+const backgroundSubmissionUncertain = ref(false);
+let calculationTimer: ReturnType<typeof setTimeout> | undefined, calculationQuery = 0;
+let calculationContext: { quoteId: string; revision: number; input: string } | undefined;
+function stopCalculationPolling() { if (calculationTimer) clearTimeout(calculationTimer); calculationTimer = undefined; checkingCalculation.value = false; ++calculationQuery; }
+let operationContext: { operation: PendingQuoteOperation; input: string } | undefined;
+async function trackedOperation(target: Quote, action: PendingQuoteOperation['action'], send: (id: string) => Promise<QuoteMutationResult>, currentPage = quotePage()) {
+	const operation = { quoteId: target.id, operationId: newOperationId(), revision: target.revision, action };
+	operationContext = { operation, input: JSON.stringify(target.body) };
+	pendingOperation.value = operation; rememberOperation(operation);
+	try {
+		const value = await executeQuoteOperation(operation, send, {
+			status: () => quoteApi.operationStatus(target.id, operation.operationId),
+			authoritative: () => quoteApi.detail(target.id, target.body._input_view === 'workbench_compact'),
+			current: () => currentPage() && quote.value === target,
+			uncertain: message => { if (currentPage() && quote.value === target) { operationNotice.value = message; target.result = null; target.result_stale = true; busy.value = false; saving.value = false; } },
+		});
+		forgetOperation(operation);
+		if (pendingOperation.value?.operationId === operation.operationId) { pendingOperation.value = undefined; operationNotice.value = ''; }
+		if (operationContext?.operation.operationId === operation.operationId) operationContext = undefined;
+		return value;
+	} catch (error) {
+		if (!(error as { operationUnconfirmed?: boolean })?.operationUnconfirmed) {
+			forgetOperation(operation);
+			if (pendingOperation.value?.operationId === operation.operationId) pendingOperation.value = undefined;
+			if (operationContext?.operation.operationId === operation.operationId) operationContext = undefined;
+		}
+		throw error;
+	}
+}
+async function checkPendingOperation() {
+	const operation = pendingOperation.value, target = quote.value, currentPage = quotePage();
+	if (!operation || !target || target.id !== operation.quoteId || checkingOperation.value) return;
+	checkingOperation.value = true;
+	const input = operationContext?.operation.operationId === operation.operationId ? operationContext.input : dirty.value ? '' : JSON.stringify(target.body);
+	try {
+		const status = await quoteApi.operationStatus(target.id, operation.operationId);
+		if (!currentPage() || quote.value !== target || pendingOperation.value?.operationId !== operation.operationId) return;
+		if (status.operation_id !== operation.operationId || status.status !== 'committed') {
+			operationNotice.value = status.status === 'running' ? '本次操作仍在处理，请稍后继续核对。' : '本次结果尚未确认。请稍后继续核对，页面输入已保留。';
+			return;
+		}
+		if (status.input_revision !== operation.revision || status.action !== operation.action) throw new Error('操作回执与当前待核对请求不一致，请核对报价版本。');
+		const value = await quoteApi.detail(target.id, target.body._input_view === 'workbench_compact');
+		if (!currentPage() || quote.value !== target || value.revision < (status.committed_revision || 0)) return;
+		forgetOperation(operation);
+		pendingOperation.value = undefined;
+		const applied = await applyMutation(target, value, operation.action === 'calculate', input, currentPage);
+		if (!currentPage() || pendingOperation.value && pendingOperation.value.operationId !== operation.operationId) return;
+		if (operationContext?.operation.operationId === operation.operationId) operationContext = undefined;
+		operationNotice.value = '';
+		if (applied) ElMessage.success(`${operation.action === 'calculate' ? '试算' : '保存'}已提交，已核对当前版本`);
+	} catch { if (currentPage()) operationNotice.value = '暂时无法核对提交结果。页面输入已保留，请稍后继续核对。'; }
+	finally { if (currentPage()) checkingOperation.value = false; }
+}
+async function reviewCurrentVersion() {
+	const operation = pendingOperation.value, target = quote.value, currentPage = quotePage();
+	if (!operation || !target || checkingOperation.value || saving.value || target.id !== operation.quoteId) return;
+	try { await confirm('本次提交结果仍未确认。将读取当前版本并保留本页修改，后续保存仍会检查版本。确定结束本次核对并继续编辑？'); } catch { return; }
+	if (!currentPage() || quote.value !== target || pendingOperation.value?.operationId !== operation.operationId) return;
+	checkingOperation.value = true;
+	try {
+		const status = await quoteApi.operationStatus(target.id, operation.operationId);
+		if (!currentPage() || quote.value !== target || pendingOperation.value?.operationId !== operation.operationId) return;
+		if (status.status === 'running') { operationNotice.value = '本次操作仍在处理，请稍后继续核对。'; return; }
+		if (status.status === 'committed') { checkingOperation.value = false; await checkPendingOperation(); return; }
+		const value = await quoteApi.detail(target.id, target.body._input_view === 'workbench_compact');
+		if (!currentPage() || quote.value !== target || pendingOperation.value?.operationId !== operation.operationId) return;
+		await applyMutation(target, value, false, '', currentPage);
+		if (!currentPage() || pendingOperation.value?.operationId !== operation.operationId) return;
+		forgetOperation(operation); pendingOperation.value = undefined; operationContext = undefined; operationNotice.value = '';
+		ElMessage.warning('已读取当前版本并保留页面输入；上次操作仍未确认，请核对清单后再保存。');
+	} catch { if (currentPage()) operationNotice.value = '当前版本读取失败，请保留输入并稍后继续核对。'; }
+	finally { if (currentPage()) checkingOperation.value = false; }
+}
 const reviewSnapshot = ref<ReviewSnapshot>();
 const resultRows = computed(() => quote.value?.result ? workbenchResults(quote.value.body.rows, quote.value.result.rows) : []);
 
@@ -1826,7 +1923,7 @@ const canEdit = computed(() => auth('quote_edit')),
 	canExport = computed(() => auth('quote_export'));
 const locked = computed(() => !canEdit.value || quote.value?.state !== 'draft');
 /** 等待期间禁止鼠标及键盘继续编辑；锁定状态仍单独决定查看和操作入口。 */
-const editLocked = computed(() => locked.value || busy.value || saving.value || reviewingAi.value || aiInputBusy.value || !!exporting.value);
+const editLocked = computed(() => locked.value || (!backgroundSubmissionUncertain.value && (busy.value || saving.value || reviewingAi.value)) || aiInputBusy.value || !!exporting.value);
 const sourceCompareDialog = ref<InstanceType<typeof SourceCompareDialog>>(),
 	batchParameterDialog = ref<InstanceType<typeof BatchParameterDialog>>(),
 	scopeDialog = ref<InstanceType<typeof QuoteScopeDialog>>(),
@@ -1834,6 +1931,21 @@ const sourceCompareDialog = ref<InstanceType<typeof SourceCompareDialog>>(),
 	selectedRowIds = ref<string[]>([]);
 const batchRows = computed(() => selectedQuoteRows(quote.value?.body.rows || [], selectedRowIds.value));
 const aiRetryDialog = ref<InstanceType<typeof AiRetryDialog>>();
+const fanAirflowUnitDialog = ref<InstanceType<typeof FanAirflowUnitDialog>>();
+async function applyFanAirflowUnits(report: FanAirflowUnitReport, decisions: FanAirflowUnitDecision[]) {
+	if (!quote.value || dirty.value || editLocked.value || report.quote_id !== quote.value.id || report.revision !== quote.value.revision)
+		throw new Error('报价已有修改或版本变化，请保存后重新读取单位建议。');
+	const target = quote.value, currentPage = quotePage(), input = JSON.stringify(target.body);
+	const replaceManualReview = !!(target.result?.manual_review_import || target.body.manual_review_snapshot?.requires_confirmation);
+	if (replaceManualReview) await confirm('本单包含人工校对价格。单位采用后重新试算将按系统规则替换人工结果，原价格保留供核对。确认继续？');
+	if (quote.value !== target || !currentPage() || dirty.value || target.revision !== report.revision) throw new Error('报价上下文已变化，请重新读取。');
+	busy.value = true;
+	try {
+		const response = await quoteApi.confirmFanAirflowUnits(target.id, target.revision, decisions, replaceManualReview, target.body._input_view === 'workbench_compact');
+		if (!(await applyMutation(target, response.quote, true, input, currentPage))) throw new Error('未能载入保存后的报价，请刷新核对实际保存状态，勿重复提交。');
+		return response.review;
+	} finally { if (currentPage()) busy.value = false; }
+}
 const failedAssistTargets = computed(() =>
 	quote.value?.result_stale ? [] : failedAssistRows(quote.value?.body.rows || [], resultRows.value || [])
 );
@@ -2299,11 +2411,11 @@ function openProductRule(row: QuoteRow) {
 			: undefined;
 	productRuleDialog.value?.open(row, body, family);
 }
-/** 查询某规则系列已到生效日的最新发布/停用版本，只有仍处于发布且未过期时才可引用，失效不回退旧规则。 */
+/** 查询某规则系列已到生效日的最新发布/停用/归档版本，只有仍处于发布且未过期时才可引用，失效不回退旧规则。 */
 function activeProductRule(family: string) {
 	const date = new Date().toLocaleDateString('sv-SE');
 	const latest = productRules.value
-		.filter((rule) => rule.family === family && ['published', 'retired'].includes(rule.status) && (rule.body.effective_from || '') <= date)
+		.filter((rule) => rule.family === family && ['published', 'retired', 'archived'].includes(rule.status) && (rule.body.effective_from || '') <= date)
 		.sort((a, b) => b.version - a.version)[0];
 	return latest?.status === 'published' && (!latest.body.effective_to || latest.body.effective_to >= date) ? latest : undefined;
 }
@@ -2423,10 +2535,19 @@ async function loadQuote(id: string, currentPage = quotePage()) {
 	}
 	if (request !== quoteLoadRequest || !currentPage()) return false;
 	applyQuote(value);
+	void restoreBackgroundCalculation(value, currentPage);
 	return true;
 }
 /** 详情读取、保存和试算均应用同一份服务端权威正文，保持行 ID、核验状态和修改基线一致。 */
 function applyQuote(value: Quote) {
+	if (backgroundJob.value && (backgroundJob.value.quote_id !== value.id ||
+		(!['queued', 'running'].includes(backgroundJob.value.state) && value.revision > (backgroundJob.value.committed_revision || backgroundJob.value.input_revision)))) {
+		backgroundJob.value = undefined;
+		backgroundNotice.value = '';
+	}
+	pendingOperation.value = readOperation(value.id);
+	operationNotice.value = pendingOperation.value ? '上次保存或试算结果待核对，请先继续核对。' : '';
+	if (pendingOperation.value) { value.result = null; value.result_stale = true; }
 	drawer.value = false;
 	regionNeedsSave.value = value.body.project_region === undefined;
 	prepareInstallation(value.body);
@@ -2614,6 +2735,7 @@ async function createBlank() {
 /** 保存可选地继续试算：应用权威正文与修订号；若保存撤销 AI 核验则中止试算，避免未核对清单直接报价。 */
 async function save(calculate: boolean, onFailure?: (message: string) => void) {
 	if (!quote.value || saving.value) return false;
+	if (pendingOperation.value?.quoteId === quote.value.id) { ElMessage.warning('请先继续核对上次保存或试算结果，当前输入已保留。'); return false; }
 	if (!requireExcelReviewApplied()) return false;
 	const currentPage = quotePage();
 	if (calculate && projectRegionIssue(quote.value.body)) {
@@ -2663,9 +2785,10 @@ async function save(calculate: boolean, onFailure?: (message: string) => void) {
 				if (target.body.installation_options) patch.installation_options = { ...patch.installation_options, region: target.body.installation_options.region };
 			}
 			const saved = target.body._input_view === 'workbench_compact'
-				? await quoteApi.patch(id, patch!)
-				: await quoteApi.save(id, JSON.parse(input), target.revision);
+				? await trackedOperation(target, 'patch', operationId => quoteApi.patch(id, patch!, operationId, true), currentPage)
+				: await trackedOperation(target, 'save', operationId => quoteApi.save(id, JSON.parse(input), target.revision, operationId, true), currentPage);
 			if (!(await applyMutation(target, saved, false, input, currentPage, submission))) return false;
+			if (saved.operation && saved.revision !== saved.operation.committed_revision) { ElMessage.warning('已核对保存记录；报价随后又有修改，请核对当前版本后再试算。'); return false; }
 		}
 		if (calculate) {
 			if (aiReviewPending.value) {
@@ -2674,11 +2797,9 @@ async function save(calculate: boolean, onFailure?: (message: string) => void) {
 				return false;
 			}
 			const target = quote.value;
-			const input = JSON.stringify(target.body);
-			const result = await quoteApi.calculate(id, target.revision, replaceManualReview, false, target.body._input_view === 'workbench_compact');
-			if (!(await applyMutation(target, result, true, input, currentPage))) return false;
+			if (!(await startBackgroundCalculation(target, replaceManualReview, false, currentPage))) return false;
 		}
-		ElMessage.success(calculate ? (quote.value.result?.formal_ready ? '试算完成，可以生成正式报价' : '试算完成，请核对待确认项') : '草稿已保存');
+		ElMessage.success(calculate ? '输入已保存，试算任务已提交；完成后请核对结果' : '输入已保存，完整核验将在试算时完成');
 		return true;
 	} catch (error) {
 		if (!currentPage()) return false;
@@ -2692,6 +2813,119 @@ async function save(calculate: boolean, onFailure?: (message: string) => void) {
 			busy.value = false;
 		}
 	}
+}
+/** 入队响应只证明接受任务；结果完成后仍按页面/输入/修订保护应用权威报价。 */
+async function startBackgroundCalculation(target: Quote, replaceManualReview: boolean, previewAi: boolean, currentPage = quotePage()) {
+	if (backgroundJob.value && backgroundJob.value.quote_id === target.id && backgroundJob.value.input_revision === target.revision
+		&& ['queued', 'running'].includes(backgroundJob.value.state)) {
+		ElMessage.info('当前输入已有试算任务，请继续核对任务。'); return false;
+	}
+	stopCalculationPolling();
+	const request: PendingCalculation = { quoteId: target.id, id: newOperationId(), revision: target.revision, replaceManualReview, previewAi };
+	calculationContext = { quoteId: target.id, revision: target.revision, input: JSON.stringify(target.body) };
+	target.result = null; target.result_stale = true;
+	pendingCalculationRequest.value = request; backgroundJob.value = undefined; backgroundNotice.value = '正在提交试算任务，输入已保存。';
+	rememberCalculation(request);
+	const generation = calculationQuery;
+	try {
+		const job = await submitCalculationOnce(request, {
+			send: () => quoteApi.startCalculation(target.id, request.revision, request.id, replaceManualReview, previewAi),
+			status: () => quoteApi.calculationStatus(target.id, request.id), current: () => quoteApi.currentCalculation(target.id),
+			active: () => currentPage() && generation === calculationQuery,
+			uncertain: () => { if (currentPage() && generation === calculationQuery) { backgroundSubmissionUncertain.value = true; busy.value = false; } },
+		});
+		if (!currentPage() || generation !== calculationQuery || quote.value?.id !== target.id) return false;
+		await acceptBackgroundState(job, currentPage, generation);
+		if (quote.value?.id === target.id && (job.state === 'completed' ? dirty.value : quote.value.revision !== request.revision || JSON.stringify(quote.value.body) !== calculationContext?.input)) {
+			backgroundNotice.value = '试算任务对应已保存的输入；本页又有修改，请保存当前输入后重新试算。'; return false;
+		}
+		return true;
+	} catch (error) {
+		if (!currentPage() || generation !== calculationQuery) return false;
+		if ((error as { status?: number }).status === 409) {
+			backgroundSubmissionUncertain.value = true; busy.value = false;
+			try {
+				const existing = await quoteApi.currentCalculation(target.id);
+				if (existing && existing.input_revision === request.revision && ['queued', 'running'].includes(existing.state)
+					&& currentPage() && generation === calculationQuery) {
+					await acceptBackgroundState(existing, currentPage, generation);
+					backgroundNotice.value = '本版本已有试算任务，正在核对该任务。';
+					return sameCalculation(existing, request) && quote.value?.revision === request.revision && JSON.stringify(quote.value.body) === calculationContext?.input;
+				}
+			} catch { /* 不自动重发冲突请求。 */ }
+		}
+		if (!(error as { calculationUnconfirmed?: boolean }).calculationUnconfirmed) { forgetCalculation(request); pendingCalculationRequest.value = undefined; }
+		backgroundNotice.value = (error as { msg?: string }).msg || '试算任务提交尚未确认，请继续核对；当前输入已保留。';
+		throw error;
+	} finally {
+		if (currentPage() && generation === calculationQuery) backgroundSubmissionUncertain.value = false;
+	}
+}
+async function acceptBackgroundState(job: QuoteCalculationJob, currentPage: () => boolean, generation: number) {
+	if (!currentPage() || generation !== calculationQuery || quote.value?.id !== job.quote_id) return;
+	backgroundJob.value = job; backgroundNotice.value = '';
+	const request: PendingCalculation = { quoteId: job.quote_id, id: job.id, revision: job.input_revision,
+		replaceManualReview: job.options.replace_manual_review, previewAi: job.options.preview_ai };
+	pendingCalculationRequest.value = request;
+	if (['queued', 'running'].includes(job.state)) {
+		rememberCalculation(request);
+		calculationTimer = setTimeout(() => void checkBackgroundCalculation(), 2500); return;
+	}
+	forgetCalculation(request); pendingCalculationRequest.value = undefined;
+	if (job.state !== 'completed') return;
+	const target = quote.value;
+	const context = calculationContext?.quoteId === job.quote_id && calculationContext.revision === job.input_revision ? calculationContext : undefined;
+	if (!canApplyCalculation(job, target, context ? false : dirty.value)) {
+		backgroundNotice.value = '本次试算已完成；当前输入已有修改或版本变化，请保存当前输入后重新试算。'; return;
+	}
+	const input = context?.input || JSON.stringify(target.body);
+	try {
+		const value = await quoteApi.detail(target.id, target.body._input_view === 'workbench_compact');
+		if (!currentPage() || generation !== calculationQuery) return;
+		if (value.revision !== job.committed_revision) { backgroundNotice.value = '试算后报价版本又有变化，请核对当前版本；本页输入已保留。'; return; }
+		if (!(await applyMutation(target, value, true, input, currentPage))) { backgroundNotice.value = '试算已完成，本页新修改已保留，请重新保存并试算。'; return; }
+		ElMessage.success(value.result_stale ? '试算结果已失效，请按当前条件重新试算' : value.result?.formal_ready ? '试算完成，可以生成正式报价' : '试算完成，请核对待确认项');
+	} catch { if (currentPage() && generation === calculationQuery) backgroundNotice.value = '试算已提交，但结果读取中断，请继续核对任务。'; }
+}
+async function checkBackgroundCalculation() {
+	if (!quote.value || checkingCalculation.value) return;
+	if (calculationTimer) clearTimeout(calculationTimer); calculationTimer = undefined;
+	const currentPage = quotePage(), generation = calculationQuery, id = quote.value.id;
+	const request = pendingCalculationRequest.value;
+	checkingCalculation.value = true;
+	try {
+		let job: QuoteCalculationJob | null = null;
+		if (request?.quoteId === id) {
+			try { job = await quoteApi.calculationStatus(id, request.id); }
+			catch {
+				const current = await quoteApi.currentCalculation(id);
+				if (current && recoverableCalculation(current, request)) job = current;
+			}
+		} else job = await quoteApi.currentCalculation(id);
+		if (!currentPage() || generation !== calculationQuery) return;
+		if (job) await acceptBackgroundState(job, currentPage, generation);
+		else backgroundNotice.value = '尚不能确认本次任务是否已提交，请继续核对；输入已保留。';
+	} catch { if (currentPage() && generation === calculationQuery) backgroundNotice.value = '任务状态读取中断，请稍后继续核对。'; }
+	finally { if (currentPage() && generation === calculationQuery) checkingCalculation.value = false; }
+}
+async function restoreBackgroundCalculation(value: Quote, currentPage: () => boolean) {
+	stopCalculationPolling(); backgroundJob.value = undefined; backgroundNotice.value = ''; checkingCalculation.value = false;
+	calculationContext = { quoteId: value.id, revision: value.revision, input: JSON.stringify(value.body) };
+	pendingCalculationRequest.value = pendingCalculation(value.id);
+	if (pendingCalculationRequest.value) { await checkBackgroundCalculation(); return; }
+	const generation = calculationQuery;
+	try {
+		const job = await quoteApi.currentCalculation(value.id);
+		if (job && ['queued', 'running'].includes(job.state)) await acceptBackgroundState(job, currentPage, generation);
+	} catch { /* 正文已读取；有恢复元数据时上方入口会明确保留核对状态。 */ }
+}
+async function cancelBackgroundCalculation() {
+	const job = backgroundJob.value, currentPage = quotePage(); if (!job || checkingCalculation.value) return;
+	try { await confirm('确认取消本次后台试算？已保存的输入和本页修改均保留。'); } catch { return; }
+	if (!currentPage() || backgroundJob.value?.id !== job.id) return;
+	const generation = calculationQuery;
+	try { await acceptBackgroundState(await quoteApi.cancelCalculation(job.quote_id, job.id), currentPage, generation); }
+	catch (error) { if (currentPage()) report(error); }
 }
 /** 全量检查绑定已保存正文与修订号，迟到响应不能覆盖另一张清单或较新的输入。 */
 async function readAiReviewPreview(target: Quote, currentPage = quotePage()) {
@@ -2811,6 +3045,7 @@ async function approveAi(acceptWarnings = false) {
 /** 未核验草稿显式预试算：保留原始异常与 pending 状态，服务端继续禁止正式导出。 */
 async function previewAiCalculation() {
 	if (!quote.value || locked.value || !quote.value.body.ai_review_status || busy.value || saving.value || reviewingAi.value || aiInputBusy.value) return;
+	if (pendingOperation.value?.quoteId === quote.value.id) { ElMessage.warning('请先继续核对上次保存或试算结果。'); return; }
 	if (!requireExcelReviewApplied()) return;
 	if (projectRegionIssue(quote.value.body)) {
 		ElMessage.warning(projectRegionIssue(quote.value.body));
@@ -2831,11 +3066,7 @@ async function previewAiCalculation() {
 		if ((dirty.value || regionNeedsSave.value) && !(await save(false))) return;
 		if (!currentPage() || !quote.value || quote.value.id !== id || locked.value) return;
 		busy.value = true;
-		const target = quote.value, calculationInput = JSON.stringify(target.body);
-		const response = await quoteApi.calculate(id, target.revision, replaceManualReview, true, target.body._input_view === 'workbench_compact');
-		if (!(await applyMutation(target, response, true, calculationInput, currentPage))) return;
-		ElMessage.success('预试算已完成，请查看逐行结果；清单仍待人工核验');
-		if (await readAiReviewPreview(quote.value, currentPage)) aiReviewIssuesOpen.value = true;
+		if (await startBackgroundCalculation(quote.value, replaceManualReview, true, currentPage)) ElMessage.success('预试算任务已提交，完成后请核对逐行结果；清单仍待人工核验');
 	} catch (error) {
 		if (currentPage()) report(error);
 	} finally {
@@ -3192,6 +3423,7 @@ onMounted(() => {
 	window.addEventListener('beforeunload', beforeUnload);
 });
 onBeforeUnmount(() => {
+	stopCalculationPolling();
 	++initializeRequest;
 	++quoteLoadRequest;
 	++productRulesRequest;

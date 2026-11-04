@@ -1,5 +1,35 @@
 /** 报价前后端交换的数据契约；金额和数值条件以字符串保存，空金额表示尚未确认，避免前端浮点数参与正式计价。 */
 export type Money = string | null;
+export interface QuoteCalculationJob {
+	id: string;
+	quote_id: string;
+	input_revision: number;
+	current_revision: number;
+	state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired' | 'superseded';
+	committed_revision?: number;
+	error_message?: string;
+	queue_ms?: number;
+	duration_ms?: number;
+	options: { replace_manual_review: boolean; preview_ai: boolean };
+}
+export interface QuoteOperationStatus {
+	operation_id: string;
+	action?: 'save' | 'patch' | 'calculate';
+	status: 'committed' | 'running' | 'unconfirmed';
+	input_revision?: number;
+	committed_revision?: number;
+	current_revision: number;
+}
+export interface ImportPreview {
+	token: string;
+	product_rows: number;
+	special_rows: number;
+	project_region: string;
+	project_region_confirmed: boolean;
+	sheets: { name: string; status: string; mapping?: Record<string, number>; suggested_mapping?: Record<string, number>; start_row?: number; suggested_start_row?: number; row_count: number }[];
+	preview: QuoteRow[];
+	special_preview: { source_row?: number; source_sheet?: string; text?: string; name?: string; original?: { cells: string[] } }[];
+}
 /** 正式规则在当前页面清单中的实际匹配结果；行标识用于应用、试算回显和原位置定位。 */
 export interface ProductRuleMatches {
 	rule_id: string;
@@ -127,8 +157,19 @@ export interface ProductRuleBody {
 	fan_price?: FanPriceSupplement;
 	/** 未收录客户型号与已确认本体公式的对应关系；按当前材料、电机和有效指标重新计算。 */
 	fan_cost?: FanCostTemplate;
+	/** 外购小风机按准确型号及风量档位取价，不以全压、功率或单双速参与匹配。 */
+	small_fan?: SmallFanRule;
 	effective_from?: string;
 	effective_to?: string;
+}
+export interface SmallFanRule {
+	model: string;
+	airflow_min: string;
+	airflow_max: string;
+	min_inclusive: boolean;
+	max_inclusive: boolean;
+	price_basis: 'cost' | 'sale';
+	price: string;
 }
 /** 一个产品报价单位对应的安装用量，表达式只引用尺寸，不引用整行数量或生产损耗。 */
 export interface ProductRuleInstallationItem {
@@ -403,6 +444,7 @@ export interface AiRetryReport {
 	entries: AiRetryEntry[];
 }
 export interface QuoteBody {
+	input_validation?: 'pending' | 'complete';
 	_input_view?: 'workbench_compact';
 	excel_parameter_review?: { filename: string; calculated_at: string; input_results: ExcelInputResult[]; changes?: ReviewImportChange[] };
 	ai_retry_report?: AiRetryReport;

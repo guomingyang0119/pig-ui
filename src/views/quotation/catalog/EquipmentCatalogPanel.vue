@@ -97,6 +97,7 @@
 					<h2>{{ isShared ? '共用报价设置' : currentProduct?.label }}</h2>
 					<el-tag effect="plain" type="info">{{ isShared ? '本版本共用' : '产品指标' }}</el-tag>
 				</div>
+				<SmallFanTierCatalogPanel v-if="selectedProduct === 'small_fan'" />
 				<div v-if="selectedProduct === 'fire'" class="catalog-temperature">
 					<span>温度规格</span
 					><el-radio-group :disabled="busy" v-model="temperature" aria-label="防火阀温度规格"
@@ -350,6 +351,7 @@ import { confirm, report, stateLabels } from '/@/views/quotation/shared';
 import { equipmentRates, equipmentComponents, equipmentVariables, equipmentFormulaInChinese as chineseFormula } from '/@/views/quotation/equipment';
 import EquipmentParameters from './EquipmentParameters.vue';
 import FireWrapSalesPanel from './FireWrapSalesPanel.vue';
+import SmallFanTierCatalogPanel from './SmallFanTierCatalogPanel.vue';
 import { mergeVentilatorPrices } from './purchasedPrices';
 import {
 	productDirectory,

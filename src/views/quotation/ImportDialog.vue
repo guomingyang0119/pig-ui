@@ -74,13 +74,14 @@
 													:disabled="columnUsed(plan, key, column.index)"
 												/>
 											</el-select>
+											<small>建议 {{ columnLetter(plan.sheet.auto_mapping?.[key]) }}；采用 {{ columnLetter(plan.mapping[key]) }}</small>
 										</el-form-item>
 									</el-form>
 									<p v-else class="no-extra-columns">未发现独立参数列，无需逐项选择。</p>
 								</section>
 								<section class="mapping-section">
 									<div class="section-heading">
-										<h3>导入预览 <span>前 5 条产品</span></h3>
+									<h3>字段预览 <span>最终行分类请在下方重新预览并确认</span></h3>
 										<el-button link type="primary" @click="plan.showSource = !plan.showSource">{{
 											plan.showSource ? '收起原表' : '查看原表'
 										}}</el-button>
@@ -123,6 +124,25 @@
 						</template>
 					</el-collapse-item>
 				</el-collapse>
+				<section class="mapping-section">
+					<el-form-item label="项目所在省份（试算前必选）">
+						<el-select v-model="projectRegion" filterable clearable placeholder="请选择项目省份">
+							<el-option v-for="province in projectProvinces" :key="province" :value="province" :label="province" />
+						</el-select>
+					</el-form-item>
+					<el-button :disabled="needsReview || !includedCount" :loading="previewBusy" @click="refreshPreview">按当前映射重新预览</el-button>
+					<template v-if="serverPreview">
+						<p>本次导入：产品 {{ serverPreview.product_rows }} 行；说明 / 特殊 {{ serverPreview.special_rows }} 行；省份：{{ serverPreview.project_region || '尚未选择，试算前需确认' }}。</p>
+						<p v-for="sheet in serverPreview.sheets" :key="sheet.name">{{ sheet.name }}：产品 {{ sheet.row_count }} 行；建议第 {{ sheet.suggested_start_row || '未识别' }} 行起，采用第 {{ sheet.start_row || '未参与' }} 行起。</p>
+						<el-table :data="serverPreview.preview" size="small" max-height="220">
+							<el-table-column prop="source_row" label="原行号" width="80" /><el-table-column prop="name" label="产品名称" min-width="180" /><el-table-column prop="spec" label="规格" min-width="160" />
+							<el-table-column label="数量 / 工程量" width="120"><template #default="{ row }">{{ row.quantity || row.engineering_quantity }}</template></el-table-column><el-table-column prop="unit" label="单位" width="70" />
+						</el-table>
+						<p v-for="(row, index) in serverPreview.special_preview" :key="index">说明位置：{{ row.source_sheet }} 第 {{ row.source_row }} 行 · {{ specialSourceText(row) }}</p>
+						<el-checkbox v-model="confirmed">已核对当前映射、起始行、产品与说明行及项目省份</el-checkbox>
+					</template>
+					<p v-else class="mapping-warning">请先按当前设置预览；修改列、起始行、参与工作表或省份后需重新确认。</p>
+				</section>
 				<details class="import-settings order-metadata">
 					<summary>客户与项目（选填）</summary>
 					<el-form label-position="top" class="metadata-fields"
@@ -138,7 +158,7 @@
 				<span>{{ imported ? '核对识别结果后即可创建整单报价' : '选择一份客户清单开始' }}</span>
 				<div>
 					<el-button :disabled="busy" @click="visible = false">取消</el-button
-					><el-button type="primary" :disabled="!imported || !includedCount || needsReview" :loading="busy" @click="create"
+					><el-button type="primary" :disabled="!imported || !includedCount || needsReview || !serverPreview || !confirmed" :loading="busy" @click="create"
 						>确认导入并创建报价</el-button
 					>
 				</div>
@@ -148,12 +168,13 @@
 </template>
 <script setup lang="ts">
 /** 常规 Excel 客户清单导入：先解析所有工作表，再核对起始行、字段映射和排除原因，最终按原工作表顺序合并创建自动识别报价草稿。 */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { quoteApi } from '/@/api/quotation';
 import { report } from '/@/views/quotation/shared';
 import { analyseSheet, mappingGroups, mappingWarnings } from './importMapping';
 import type { ColumnMapping } from './importMapping';
-import type { ImportResult, ImportSheet } from '/@/types/quotation';
+import type { ImportResult, ImportSheet, ImportPreview } from '/@/types/quotation';
+import { projectProvinces } from './workbench/projectRegion';
 /** 每个工作表独立保存导入计划；空白表、人工排除表及自动关联的核对参数表有不同处理口径。 */
 interface SheetPlan {
 	sheet: ImportSheet;
@@ -174,6 +195,27 @@ const visible = ref(false),
 	expanded = ref<string[]>([]),
 	customer = ref(''),
 	project = ref('');
+const projectRegion = ref(''), serverPreview = ref<ImportPreview>(), confirmed = ref(false), previewBusy = ref(false);
+function specialSourceText(row: ImportPreview['special_preview'][number]) {
+	return row.text || row.name || row.original?.cells?.filter(value => value.trim()).join('；').slice(0, 240) || '原表说明';
+}
+let previewGeneration = 0, uploadGeneration = 0;
+function importSettings() {
+	return { sheet_settings: plans.value.map(plan => ({ name: plan.sheet.name, start_row: plan.startRow, mapping: { ...plan.mapping }, excluded: plan.excluded, exclude_reason: plan.excludeReason })), project_region: projectRegion.value, project_region_confirmed: !!projectRegion.value };
+}
+const previewKey = computed(() => JSON.stringify({ id: imported.value?.id, ...importSettings() }));
+watch(previewKey, () => { previewGeneration++; serverPreview.value = undefined; confirmed.value = false; previewBusy.value = false; }, { flush: 'sync' });
+async function refreshPreview() {
+	if (!imported.value || needsReview.value || !includedCount.value) return;
+	const generation = ++previewGeneration, id = imported.value.id, key = previewKey.value;
+	serverPreview.value = undefined; confirmed.value = false; previewBusy.value = true;
+	try {
+		const value = await quoteApi.previewImport(id, importSettings());
+		if (generation === previewGeneration && key === previewKey.value && visible.value) serverPreview.value = value;
+	} catch (error) { if (generation === previewGeneration) report(error); }
+	finally { if (generation === previewGeneration) previewBusy.value = false; }
+}
+watch(visible, () => { if (!visible.value) { previewGeneration++; uploadGeneration++; serverPreview.value = undefined; confirmed.value = false; } }, { flush: 'sync' });
 /** 整单摘要仅汇总有数据且参与报价的工作表；needsReview 检查会阻止导入的缺项，规格/数量提示单独供用户核对。 */
 const includedPlans = computed(() => plans.value.filter((p) => p.sheet.rows.length && !p.excluded));
 const includedCount = computed(() => includedPlans.value.length);
@@ -279,23 +321,29 @@ function columns(plan: SheetPlan) {
 }
 /** 重置本次导入计划与报价抬头，打开空白弹窗等待选择客户清单。 */
 function open() {
+	uploadGeneration++;
+	busy.value = false;
 	imported.value = undefined;
 	plans.value = [];
 	expanded.value = [];
 	customer.value = '';
 	project.value = '';
+	projectRegion.value = '';
 	visible.value = true;
 }
 /** 上传 Excel 获取整份文件解析结果，为每个表建立自动建议映射。核对参数表默认关联主表，其余缺项工作表自动展开提示。 */
 async function upload(event: Event) {
 	const file = (event.target as HTMLInputElement).files?.[0];
 	if (!file) return;
+	const request = ++uploadGeneration;
 	imported.value = undefined;
 	plans.value = [];
 	expanded.value = [];
 	busy.value = true;
 	try {
-		imported.value = await quoteApi.upload(file);
+		const value = await quoteApi.upload(file);
+		if (request !== uploadGeneration || !visible.value) return;
+		imported.value = value;
 		plans.value = imported.value.sheets.map((sheet) => ({
 			sheet,
 			startRow: sheet.auto_start_row || undefined,
@@ -309,13 +357,14 @@ async function upload(event: Event) {
 		expanded.value = plans.value.filter((plan) => !!reviewIssue(plan) || warnings(plan).length).map((plan) => plan.sheet.name);
 		if (!expanded.value.length && includedPlans.value.length) expanded.value = [includedPlans.value[0].sheet.name];
 	} catch (error) {
-		report(error);
+		if (request === uploadGeneration && visible.value) report(error);
 	} finally {
-		busy.value = false;
+		if (request === uploadGeneration) busy.value = false;
 	}
 }
 /** 把每个工作表的确认映射、起始行和排除原因一起提交；创建 auto_v1 草稿后将编号通知工作台继续补参数与试算。 */
 async function create() {
+	if (!serverPreview.value || !confirmed.value || needsReview.value || !imported.value || busy.value) return;
 	busy.value = true;
 	try {
 		const result = await quoteApi.create({
@@ -323,13 +372,9 @@ async function create() {
 			customer: customer.value,
 			project: project.value,
 			import_id: imported.value?.id,
-			sheet_settings: plans.value.map((plan) => ({
-				name: plan.sheet.name,
-				start_row: plan.startRow,
-				mapping: plan.mapping,
-				excluded: plan.excluded,
-				exclude_reason: plan.excludeReason,
-			})),
+			...importSettings(),
+			confirmation_required: true,
+			import_confirmation: { token: serverPreview.value.token, confirmed: true },
 		});
 		visible.value = false;
 		emit('created', result.id);
