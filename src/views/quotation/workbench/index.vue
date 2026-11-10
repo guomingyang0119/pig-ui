@@ -949,7 +949,7 @@
 		<input ref="reviewFile" type="file" accept=".xlsx" hidden @change="previewReviewFile" />
 		<el-dialog
 			v-model="reviewDialog"
-			:title="reviewPreview?.input_recalculated ? '确认保存Excel参数 · 仅预览，尚未保存' : '确认回导人工报价'"
+			:title="reviewPreview?.parameter_errors?.length ? '修正Excel报价参数' : reviewPreview?.input_recalculated ? '确认保存Excel参数 · 仅预览，尚未保存' : '确认回导人工报价'"
 			width="min(1500px, 96vw)"
 			top="4vh"
 			class="review-import-dialog"
@@ -958,7 +958,8 @@
 			:show-close="!busy"
 			destroy-on-close
 		>
-			<template v-if="reviewPreview">
+			<ExcelParameterErrors v-if="reviewPreview?.parameter_errors?.length" :errors="reviewPreview.parameter_errors" />
+			<template v-else-if="reviewPreview">
 				<el-alert
 					v-if="reviewPreview.location_changed"
 					type="warning"
@@ -1082,6 +1083,7 @@
 				<el-button v-if="pendingExcelParameters" :disabled="busy" type="danger" plain @click="discardExcelReview">放弃本次回导</el-button>
 				<el-button :disabled="busy" @click="reviewDialog = false">{{ pendingExcelParameters ? '稍后处理' : '取消' }}</el-button>
 				<el-button
+					v-if="!reviewPreview?.parameter_errors?.length"
 					type="primary"
 					:loading="busy"
 					:disabled="
@@ -1108,7 +1110,8 @@
 			<p>{{ aiInputFilename }}</p>
 			<el-alert v-if="aiInputBusy" title="正在处理清单，请等待完成。" type="info" :closable="false" show-icon />
 			<el-alert v-if="aiInputError" :title="aiInputError" type="error" :closable="false" show-icon />
-			<template v-if="aiInputPreview">
+			<ExcelParameterErrors v-if="aiInputPreview?.parameter_errors?.length" :errors="aiInputPreview.parameter_errors" />
+			<template v-else-if="aiInputPreview">
 				<el-alert
 					:title="`共 ${aiInputPreview.product_row_count} 条明细、${aiInputPreview.special_row_count} 条汇总或备注，修改了 ${aiInputPreview.changed_row_count} 行、${aiInputPreview.change_count} 个字段。可保存修改并先试算；全部核对完成后再确认核验。`"
 					type="warning"
@@ -1150,8 +1153,8 @@
 			</template>
 			<template #footer>
 				<el-button :disabled="aiInputBusy" @click="aiInputDialog = false">取消</el-button>
-				<el-button :loading="aiInputBusy" :disabled="!aiInputPreview?.change_count || !!aiInputError" @click="applyAiInputFile(true)">保存修改并先试算</el-button>
-				<el-button type="primary" :loading="aiInputBusy" :disabled="!aiInputPreview?.change_count || !!aiInputError || aiInputPreview.ai_review_preview?.can_approve === false" @click="applyAiInputFile()">
+				<el-button v-if="!aiInputPreview?.parameter_errors?.length" :loading="aiInputBusy" :disabled="!aiInputPreview?.change_count || !!aiInputError" @click="applyAiInputFile(true)">保存修改并先试算</el-button>
+				<el-button v-if="!aiInputPreview?.parameter_errors?.length" type="primary" :loading="aiInputBusy" :disabled="!aiInputPreview?.change_count || !!aiInputError || aiInputPreview.ai_review_preview?.can_approve === false" @click="applyAiInputFile()">
 					确认核验并统一试算
 				</el-button>
 			</template>
@@ -1178,6 +1181,15 @@
 					<el-button link type="primary" @click="reloadRowCalculation">重试读取</el-button>
 				</div>
 				<ProductNameReview :review="currentProductNameReview(selectedRow)" />
+				<section v-if="!dirty && !quote.result_stale && selectedResult?.detail?.recognition_source === 'remark'" class="q-section">
+					<h4>本次试算采用的备注</h4>
+					<p>{{ selectedResult.detail.recognition_evidence }}</p>
+					<p v-if="selectedResult.detail.remark_location" class="q-muted">{{ selectedResult.detail.remark_location }}</p>
+					<p v-if="selectedResult.detail.remark_pricing_product">计价口径 {{ selectedResult.product_rule?.body?.name || selectedResult.detail.remark_pricing_product }}</p>
+					<p v-for="change in selectedResult.detail.remark_parameter_changes" :key="change.field">
+						{{ change.label }}采用 {{ change.effective }}<span v-if="change.before && change.before !== change.effective">（原值 {{ change.before }}）</span>
+					</p>
+				</section>
 				<el-button v-if="selectedRow.category === '风机' || selectedRow.attributes.equipment_kind === 'fan'" :disabled="dirty || busy || saving" type="primary" plain @click="fanAirflowUnitDialog?.open(selectedRow.row_id ? [selectedRow.row_id] : [])">核对风量单位／查看确认记录</el-button>
 				<section v-if="selectedRow.import_review || hasFeatureParameters(selectedRow)" class="q-section">
 					<p v-if="selectedRow.import_review?.section">所属章节：{{ selectedRow.import_review.section }}</p>
@@ -1620,6 +1632,7 @@ import {
 	updateRowParameter,
 } from './rowReview';
 import InstallationPanel from './InstallationPanel.vue';
+import ExcelParameterErrors from './ExcelParameterErrors.vue';
 import ExcelReviewResults from './ExcelReviewResults.vue';
 import AccessoryReviewPanel from './AccessoryReviewPanel.vue';
 import SourceDiameterPanel from './SourceDiameterPanel.vue';
@@ -3137,7 +3150,7 @@ async function previewAiInputFile(event: Event) {
 
 /** 确认差异后核对报价ID、revision及未保存状态，统一更新、记录核验并试算，再打开可重复查看的结果。 */
 async function applyAiInputFile(previewAi = false) {
-	if (!quote.value || !aiInputPreview.value?.change_count || !aiInputTarget.value || locked.value || aiInputBusy.value) return;
+	if (!quote.value || !aiInputPreview.value?.import_id || !aiInputPreview.value.change_count || !aiInputTarget.value || locked.value || aiInputBusy.value) return;
 	if (dirty.value || quote.value.id !== aiInputTarget.value.id || quote.value.revision !== aiInputTarget.value.revision) {
 		aiInputError.value = '当前草稿已有变化，请关闭窗口，保存并重新上传当前版本的已校验清单';
 		return;
@@ -3318,7 +3331,7 @@ async function previewReviewFile(event: Event) {
 
 /** 把确认的人工价格回导应用到当前修订版，读取重新汇总的材料、安装和整单结果，并提示是否仍有待确认项。 */
 async function applyReviewFile() {
-	if (busy.value || !quote.value || !reviewPreview.value?.change_count || !allScopeRestorationsConfirmed.value) return;
+	if (busy.value || !quote.value || !reviewPreview.value?.import_id || !reviewPreview.value.change_count || !allScopeRestorationsConfirmed.value) return;
 	if (!ordinaryReviewReady()) return;
 	if (dirty.value) {
 		ElMessage.warning('页面有未保存修改。请撤销页面修改后确认回导，或放弃本次回导后保存页面并重新导出填写。');

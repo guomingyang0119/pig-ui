@@ -24,8 +24,8 @@
 							<div v-if="canManage" class="q-toolbar">
 								<template v-if="editable">
 									<el-button :disabled="busy" @click="save">保存草稿</el-button>
-									<el-button :disabled="busy" v-if="!regionalPrices || !editing.body.purchased_flanges" @click="act('load-regional-prices')"
-										>载入地区价格与外购法兰</el-button
+									<el-button :disabled="busy || dirty" v-if="!regionalPrices || !editing.body.purchased_flanges || !editing.body.regional_processing_source || !editing.body.shaanxi_price_source" @click="act('load-regional-prices')"
+										>载入地区价格与加工费</el-button
 									>
 									<el-button :disabled="busy || (!editing.id || dirty)" @click="act('trial')">校验指标</el-button>
 									<el-button type="primary" :disabled="busy || (!editing.id || dirty)" @click="act('publish')">发布指标</el-button>
@@ -46,9 +46,10 @@
 							<el-option v-for="region in ductPriceRegions" :key="region" :label="region" :value="region" />
 						</el-select>
 						<span class="q-muted">材料吨价与外购法兰单价按项目省份取价；空白表示未配置。</span>
+						<el-checkbox v-if="regionalPrices && (priceRegion !== '陕西' || editing.body.shaanxi_price_source)" v-model="showUnconfiguredDucts" :disabled="busy">显示未配置规格</el-checkbox>
 					</div>
 					<p v-if="!regionalPrices" class="catalog-scope">此历史版本仅维护贵州吨价。创建新版本或在草稿中载入地区吨价后，可维护各地区价格。</p>
-					<p v-if="editing.body.regional_price_source" class="q-muted">吨价依据：{{ editing.body.regional_price_source }}</p>
+					<p v-if="priceSource" class="q-muted">价格依据：{{ priceSource }}</p>
 					<div v-show="metadataVisible" class="catalog-metadata">
 						<el-form label-position="top" :disabled="!editable" class="q-grid" @submit.prevent>
 							<el-form-item label="指标名称"><el-input v-model="editing.body.name" /></el-form-item>
@@ -109,7 +110,7 @@
 						</div>
 						<section v-if="isDuctMaterial" class="catalog-product-section" aria-label="板材基价">
 							<h3>板材基价</h3>
-							<p class="catalog-scope">维护{{ priceRegion }}当前材质和厚度的吨位单价（元/吨）；其他地区价格独立保存。</p>
+							<p class="catalog-scope">维护{{ priceRegion }}当前材质和厚度的吨位单价（元/吨）{{ regionalProcessing ? '及直管、异形加工费（元/㎡）' : '' }}；其他地区独立保存。</p>
 							<el-table :data="materials" class="q-table" max-height="550">
 								<el-table-column prop="name" label="板材名称" min-width="210" />
 								<el-table-column prop="thickness" label="厚度（mm）" width="130" />
@@ -123,9 +124,18 @@
 											placeholder="未配置"
 											inputmode="decimal" /></template
 								></el-table-column>
-								<el-table-column label="原表位置" min-width="150"
+								<el-table-column v-if="regionalProcessing" label="直管加工费（元/㎡）" min-width="180">
+									<template #default="{ row }"><el-input :model-value="ductProcessingPrice(row, priceRegion, 'straight')" @update:model-value="setDuctProcessingPrice(row, priceRegion, 'straight', $event)" :aria-label="priceRegion + row.name + '直管加工费'" :disabled="!priceEditable" placeholder="未配置" inputmode="decimal" /></template>
+								</el-table-column>
+								<el-table-column v-if="regionalProcessing" label="异形加工费（元/㎡）" min-width="180">
+									<template #default="{ row }"><el-input :model-value="ductProcessingPrice(row, priceRegion, 'irregular')" @update:model-value="setDuctProcessingPrice(row, priceRegion, 'irregular', $event)" :aria-label="priceRegion + row.name + '异形加工费'" :disabled="!priceEditable" placeholder="未配置" inputmode="decimal" /></template>
+								</el-table-column>
+								<el-table-column label="吨价原表位置" min-width="180"
 									><template #default="{ row }">{{ ductTonPriceSource(row, priceRegion, regionalPrices) }}</template></el-table-column
 								>
+								<el-table-column v-if="regionalProcessing" label="加工费原表位置" min-width="230">
+									<template #default="{ row }"><div>直管：{{ row.processing_source_cells?.[priceRegion]?.straight || '未配置来源' }}</div><div>异形：{{ row.processing_source_cells?.[priceRegion]?.irregular || '未配置来源' }}</div></template>
+								</el-table-column>
 							</el-table>
 							<h3 style="margin-top: 24px">缺少板厚时的默认选厚</h3>
 							<p class="catalog-scope">客户已明确的板厚优先。矩形看长边，圆形看直径；共板法兰、共板打孔用中压，排烟系统或角钢法兰用高压，排烟优先。超过4000mm待确认。</p>
@@ -140,16 +150,16 @@
 							<p class="catalog-scope">黑角铁、热镀锌法兰的角铁材料部分乘 0.92 后再加加工费；吨价按项目省份取价，未配置时待确认。外购不含税成品固定价不重复折减。</p>
 							<el-table :data="flangeDefaults" class="q-table" aria-label="角钢法兰默认选型" style="margin-bottom: 18px">
 								<el-table-column prop="basis" label="面积口径" min-width="120" />
-								<el-table-column prop="region" label="地区" min-width="130" />
 								<el-table-column prop="size30" label="30号默认档位" min-width="190" />
 								<el-table-column prop="size40" label="40号默认档位" min-width="190" />
+								<el-table-column prop="size50" label="50号默认档位" min-width="190" />
 							</el-table>
 							<p v-if="editing.body.black_flange_regions && !editing.body.black_flange_regions.includes(priceRegion)" class="q-muted">
 								{{ priceRegion }}不提供黑角铁法兰，仅展示可用法兰指标。
 							</p>
 							<el-table :data="flanges" class="q-table" max-height="550">
-								<el-table-column prop="name" label="规格 / 档位" min-width="300" />
-								<el-table-column prop="size" label="型号" width="80" /><el-table-column prop="grade" label="计算档位" width="110" />
+								<el-table-column label="材料名称" min-width="190"><template #default="{ row }">{{ row.material === 'black' ? '黑角铁法兰' : '热镀锌角铁法兰' }}</template></el-table-column>
+								<el-table-column label="规格型号" width="110"><template #default="{ row }">{{ row.size }}×{{ row.size }}</template></el-table-column><el-table-column prop="grade" label="每根重量（kg）" width="145" />
 								<el-table-column label="吨价（元/吨）" min-width="130"
 									><template #default="{ row }"
 										><el-input
@@ -317,6 +327,10 @@ import {
 	setDuctTonPrice,
 	ductTonPriceSource,
 	visibleDuctFlanges,
+	visibleDuctRows,
+	ductProcessingPrice,
+	setDuctProcessingPrice,
+	ductFlangeDefaults,
 	ductFixedPrice,
 	setDuctFixedPrice,
 } from './ductRegionalPrices';
@@ -337,7 +351,10 @@ const catalogs = ref<Catalog[]>([]),
 const versionHistoryVisible = ref(false),
 	metadataVisible = ref(false);
 const priceRegion = ref('贵州');
+const showUnconfiguredDucts = ref(false);
 const regionalPrices = computed(() => !!editing.value?.body.price_regions);
+const regionalProcessing = computed(() => priceRegion.value === '陕西' ? !!editing.value?.body.shaanxi_price_source : !!editing.value?.body.regional_processing_source);
+const priceSource = computed(() => priceRegion.value === '陕西' ? editing.value?.body.shaanxi_price_source : editing.value?.body.regional_price_source);
 const priceEditable = computed(() => editable.value && (regionalPrices.value || priceRegion.value === '贵州'));
 const thicknessDefaults = [
 	{ range: '≤320', medium: '0.5', high: '0.75' },
@@ -348,11 +365,7 @@ const thicknessDefaults = [
 	{ range: '＞1550且≤2000', medium: '1.2', high: '1.5' },
 	{ range: '＞2000且≤4000', medium: '1.2', high: '1.5' },
 ];
-const flangeDefaults = [
-	{ basis: '净面积', region: '所有地区', size30: '30热镀锌8.5KG', size40: '40热镀锌14.5KG' },
-	{ basis: '开板面积', region: '贵州', size30: '30黑角铁6.5KG', size40: '40黑角铁11.5KG' },
-	{ basis: '开板面积', region: '其他地区', size30: '30热镀锌7.5KG', size40: '40热镀锌12.5KG' },
-];
+const flangeDefaults = computed(() => ductFlangeDefaults(priceRegion.value));
 const visibleDuctDirectory = computed(() =>
 	ductDirectory.map((group) => ({
 		...group,
@@ -364,13 +377,15 @@ const visibleDuctDirectory = computed(() =>
 const currentDuctGroup = computed(() => visibleDuctDirectory.value.find((group) => group.items.some((item) => item.id === tab.value)));
 const currentDuct = computed(() => currentDuctGroup.value?.items.find((item) => item.id === tab.value));
 const isDuctMaterial = computed(() => ductDirectory[0].items.some((item) => item.id === tab.value));
-const materials = computed(() => (editing.value?.body.materials || []).filter((row) => ductMaterialGroup(row.material) === tab.value));
-const flanges = computed(() => (editing.value ? visibleDuctFlanges(editing.value.body, priceRegion.value) : []));
+const materials = computed(() => visibleDuctRows(editing.value?.body.materials || [], priceRegion.value, showUnconfiguredDucts.value, !!editing.value?.body.shaanxi_price_source).filter((row) => ductMaterialGroup(row.material) === tab.value));
+const flanges = computed(() => (editing.value ? visibleDuctFlanges(editing.value.body, priceRegion.value, showUnconfiguredDucts.value) : []));
 const rateGroup = computed(() => (tab.value.startsWith('galvanized_') ? 'galvanized' : tab.value.startsWith('stainless_') ? 'stainless' : tab.value));
 const visibleRateKeys = computed(() => [...new Set([...Object.keys(editing.value?.body.rates || {}), 'circular_finished_extra'])]
-	.filter((key) => ductRateGroup(key) === rateGroup.value));
+	.filter((key) => ductRateGroup(key) === rateGroup.value && (!regionalProcessing.value || !['galvanized_straight', 'galvanized_irregular', 'galvanized_1_5_straight', 'galvanized_1_5_irregular', 'stainless_straight', 'stainless_irregular'].includes(key))));
 const rateScope = computed(() =>
-	rateGroup.value === 'galvanized'
+	regionalProcessing.value && ['galvanized', 'stainless'].includes(rateGroup.value)
+		? '直管、异形加工费按上方地区与板厚取值。以下为共用附加参数及不区分管型的专门费率。'
+		: rateGroup.value === 'galvanized'
 		? '40g 与 80g 镀锌风管共用以下加工参数，修改任一处会同步影响两类风管。'
 		: rateGroup.value === 'stainless'
 		? '201 与 304 不锈钢风管共用以下加工参数，板材吨价分别维护。'
@@ -455,7 +470,7 @@ const formulaParameters: Record<string, FormulaParameter> = {
 	flange_grade: {
 		label: '角钢计算档位',
 		unit: '业务档位值',
-		description: '明确档位优先；默认按面积口径和项目省份选择。净面积取热镀锌30# 8.5、40# 14.5；开板贵州取黑角铁6.5/11.5，其他地区取热镀锌7.5/12.5；50# 需明确选择。',
+		description: '明确档位优先；未填写时按面积口径和项目省份选择，具体重量见「角钢法兰」中的当前地区默认档位表。明确档位缺价时保持待确认，不替换档位。',
 	},
 	flange_processing: { label: '角钢法兰加工费', unit: '元/米', description: '取「角钢法兰」中所选材质、规格和档位对应的每米加工费。' },
 };
@@ -605,7 +620,7 @@ async function act(action: string) {
 	try {
 		const messages: Record<string, string> = {
 			'load-regional-prices':
-				'确认载入地区吨价与外购法兰成品价？保留已维护价格、公式和加工费，补充四种外购法兰及黑角铁仅贵州可用的范围。陕西及原表缺价留空。保存发布后用于新试算。',
+				'确认载入地区价格与加工费？补齐六地缺少的规格和加工费；陕西首次载入会填入无来源的空价，保留已填价格及有来源的空值。载入后再次清空的陕西价格不会自动恢复。其他地区已有配置及计算公式保留，保存并发布后用于新试算。',
 			publish: '确认发布此指标？生效后，新试算将使用此版本。',
 			retire: '确认停用？停用最新版本后将阻止新的正式报价，不会回退到旧版本。',
 			delete: '确认删除这份指标草稿？',

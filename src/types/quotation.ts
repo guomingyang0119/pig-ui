@@ -309,6 +309,21 @@ export interface ProductNameReview {
 	control_evidence?: string;
 	issue?: string;
 	notice?: string;
+	price_comparison?: {
+		selected_source?: 'main' | 'feature';
+		same_price?: boolean;
+		note?: string;
+		options: {
+			source: 'main' | 'feature';
+			label: string;
+			name: string;
+			status: string;
+			size?: string;
+			unit_price: string | null;
+			reason?: string;
+			trace?: { step: string; expression: string; value: string }[];
+		}[];
+	};
 }
 export interface QuoteRow {
 	/** 工作台原文重字段按需读取；不能将此投影视为完整保存正文。 */
@@ -512,6 +527,11 @@ export interface RowResult {
 	pricing_mode?: string;
 	candidates?: { id: string; body: { name: string; attributes: FanPoint } }[];
 	detail?: EquipmentMechanismDetail & {
+		recognition_source?: string;
+		recognition_evidence?: string;
+		remark_location?: string;
+		remark_pricing_product?: string;
+		remark_parameter_changes?: { field: string; label: string; before: string; effective: string }[];
 		selected_fan?: FanPoint;
 		selection_note?: string;
 		components?:
@@ -663,8 +683,15 @@ export interface ReviewImportRow {
 	derived_fields: string[];
 }
 
+export interface ExcelParameterError {
+	visible_row: number;
+	source_location: string;
+	message: string;
+}
+
 /** 人工价格回导的预览汇总，column_count 区分不含安装 10 列与含安装 12 列，导入编号用于确认应用。 */
 export interface ReviewImportPreview {
+	parameter_errors?: ExcelParameterError[];
 	price_conflicts?: ReviewPriceConflict[];
 	installation_rule_candidates?: InstallationRuleCandidate[];
 	can_publish_installation_rules?: boolean;
@@ -792,6 +819,7 @@ export interface ExcelInputResult {
 
 /** AI 清单字段回导的只读预览，统计产品/特殊行和变化数量；确认应用后更新原草稿，不直接产生价格。 */
 export interface AiInputImportPreview {
+	parameter_errors?: ExcelParameterError[];
 	ai_review_preview?: AiReviewPreview;
 	import_id: string;
 	filename: string;
@@ -862,6 +890,8 @@ export interface DuctTonPrices {
 	source_cell?: string;
 	ton_prices?: Record<string, string>;
 	source_cells?: Record<string, string>;
+	processing_prices?: Record<string, { straight?: string; irregular?: string }>;
+	processing_source_cells?: Record<string, { straight?: string; irregular?: string }>;
 }
 export interface PurchasedDuctFlange {
 	name: string;
@@ -880,6 +910,8 @@ export interface CatalogBody {
 	company_id: string;
 	price_regions?: string[];
 	regional_price_source?: string;
+	shaanxi_price_source?: string;
+	regional_processing_source?: string;
 	black_flange_regions?: string[];
 	purchased_flanges?: PurchasedDuctFlange[];
 	materials: ({ name: string; material: string; thickness: string; unit: string } & DuctTonPrices)[];
